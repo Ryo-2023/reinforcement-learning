@@ -362,7 +362,7 @@ class PolicyTreeNode:
 
         # メモリの閾値を設定（例：1GB）
         memory_threshold = 1 * 1024 ** 3
-
+        """
         if total_size < memory_threshold:
             print("Data size is within memory threshold. Proceeding with GPU.")
             num_gpus = torch.cuda.device_count()
@@ -380,28 +380,29 @@ class PolicyTreeNode:
 
             values = {s: expected_future_value for s, expected_future_value in results}
         else:
-            print("Data size exceeds memory threshold. Skipping parallel computation.")
-            # 並列計算をスキップしてシングルスレッドで計算する場合の処理を追加
-            with tqdm(total=len(states), desc="Processing states (s)", leave=False) as pbar_s:
-                for s in states:
-                    expected_future_value = 0
-                    for sp in states:
-                        for o in observations:
-                            trans_prob = torch.tensor(self._agent.transition_model.probability(sp, s, self.action, self.device)).to(self.device)
-                            obsrv_prob = torch.tensor(self._agent.observation_model.probability(o, sp, self.action, self.device)).to(self.device)
-                            if len(self.children) > 0:
-                                subtree_value = self.children[o].values[sp]  # corresponds to V_{oi(p)} in paper
-                            else:
-                                subtree_value = 0.0
-                            reward = self._agent.reward_model.sample(s, self.action, sp)
-                            expected_future_value += torch.mean(trans_prob) * torch.mean(obsrv_prob) * (reward + discount_factor * subtree_value)
-                    values[s] = expected_future_value
-                    pbar_s.update(1)
+        """
+        print("Data size exceeds memory threshold. Skipping parallel computation.")
+        # 並列計算をスキップしてシングルスレッドで計算する場合の処理を追加
+        with tqdm(total=len(states), desc="Processing states (s)", leave=False) as pbar_s:
+            for s in states:
+                expected_future_value = 0
+                for sp in states:
+                    for o in observations:
+                        trans_prob = torch.tensor(self._agent.transition_model.probability(sp, s, self.action, self.device)).to(self.device)
+                        obsrv_prob = torch.tensor(self._agent.observation_model.probability(o, sp, self.action, self.device)).to(self.device)
+                        if len(self.children) > 0:
+                            subtree_value = self.children[o].values[sp]  # corresponds to V_{oi(p)} in paper
+                        else:
+                            subtree_value = 0.0
+                        reward = self._agent.reward_model.sample(s, self.action, sp)
+                        expected_future_value += torch.mean(trans_prob) * torch.mean(obsrv_prob) * (reward + discount_factor * subtree_value)
+                values[s] = expected_future_value
+                pbar_s.update(1)
         return values
-
+        
         values = {s: expected_future_value for s, expected_future_value in results}
         return values
-        """
+        
         with tqdm(total=len(states), desc="Processing states (s)",leave=False) as pbar_s:
             for s in states:
                 expected_future_value = 0
@@ -427,7 +428,6 @@ class PolicyTreeNode:
                                 pbar_o.update(1)  # 内側のループの進行状況バーを更新
                         pbar_sp.update(1)  # 中間のループの進行状況バーを更新
                 pbar_s.update(1)
-        """
         
         #return values
 

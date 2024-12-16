@@ -1,13 +1,10 @@
-import pomdp_py
-import random
-import itertools
-import ast
-import inspect as isp
-import scipy
-import numpy as np
-import matplotlib.pyplot as plt
 import torch
-import os
+
+# デバイスの設定
+torch.set_default_dtype(torch.float32)
+torch.set_default_tensor_type = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor
+device = "cuda" if torch.cuda.is_available() else "cpu"
+torch.set_default_device(device)
 
 class Model():
     def __init__(self, sigma, num_people):
@@ -73,10 +70,25 @@ class Model():
                 end_j = (j+1)*self.num_comfort*self.num_follows
                 self.trans_prob[start_i:end_i,start_j:end_j] = self.trans_prob_attention[i,j] * self.trans_prob_others
         """
-                
+        
         # 観測確率の初期化
         self.obs_prob = self.init_obs_prob()
         
+        """
+        tensor_shape = (self.num_states, self.num_actions, self.num_observations)
+        self.obs_prob_follow = self.obs_prob_not_follow = torch.zeros(tensor_shape)
+        # follow = 1, システムに従う場合  shape:(12, 6, 3)
+        for i in range(self.num_states):
+            for j in range(self.num_actions):
+                prob = 0.1 * self.pdf_list(self.states[i, :self.n], self.sigma, self.observations) + 0.9 * self.pdf_list(self.actions[j], self.sigma, self.observations)
+                self.obs_prob_follow[i, j, :] = prob
+                    
+        # follow = 0, システムに従わない場合
+        for i in range(self.num_states):
+            for j in range(self.num_actions):
+                prob = 0.9 * self.pdf_list(self.states[i, :self.n], self.sigma, self.observations) + 0.1 * self.pdf_list(self.actions[j], self.sigma, self.observations)
+                self.obs_prob_follow[i, j, :] = prob
+        """
         # 信念状態の初期化
         self.belief = torch.ones(self.num_states) / self.num_states
         
@@ -106,6 +118,17 @@ class Model():
         normalized_probabilities = torch.tensor([prob / sum(probabilities) for prob in probabilities])
         return normalized_probabilities
     
+    def update_belief(self):
+        # 正規化項 reg
+        sum_s1 = (torch.einsum("ij,i->j",self.trans_prob,self.belief)/self.num_actions).repeat(self.num_actions,1)     # [s,s'] * [s] -> [s']  -> [a,s'] (整形)
+        sum_s2 = torch.einsum("ij,jkl->ikl",self.trans_prob,self.obs_prob)                          # [s,s''] * [s'',a,o] -> [s,a,o]
+        reg = torch.einsum("j,jkl->kl",self.belief,sum_s2)                                          # [s] * [s,a,o] -> [a,o]
+        
+        # 信念の更新
+        belief = torch.einsum("sao,as->aos",self.trans_prob,sum_s1) / reg
+        
+        return belief
+
     def init_obs_prob(self):
         tensor_shape = (self.num_states, self.num_actions, self.num_observations)
         obs_prob = torch.zeros(tensor_shape)
@@ -139,14 +162,9 @@ class Model():
         """
         return obs_prob
         
-# 使用例
-model = Model(sigma=0.3, num_people=3)
-#print("attentions:", model.attentions)
-#print("states:", model.states)
-#print("actions:", model.actions)
-#print("num_actions:", model.num_actions)
-#print("observations:", model.observations)
-sum_s = torch.einsum("i,ij->j",model.belief,model.trans_prob)
-sum_s2 = torch.einsum("i,ijk->ijk",sum_s,model.obs_prob)
-print(sum_s.shape)
-print(sum_s2)
+class POMDP(Model):
+    def __init__(self, sigma, num_people):
+        super().__init__(sigma, num_people)
+        
+    def ValueIteration(self, threshold=1e-3, gamma=0.9):
+        

@@ -9,13 +9,13 @@ class State:
         self.env = env
         
     def __repr__(self):
-        return "Model_State(user=%s, environment=%s)" % (self.user, self.env)
+        return "State(user=%s, environment=%s)" % (self.user, self.env)
     
     def get_all_states(self):
         """Only need to implement this if you're using
         a solver that needs to enumerate over the observation space (e.g. value iteration)
         """
-        state_list = generate_weight_list()
+        state_list = generate_weight_list(2)
         all_states = []
         for env in state_list:
             for user in state_list:
@@ -33,18 +33,18 @@ class Action:
         """Only need to implement this if you're using
         a solver that needs to enumerate over the observation space (e.g. value iteration)
         """
-        action_list = generate_weight_list()
+        action_list = generate_weight_list(5)
         all_actions = []
         for action in action_list:
             all_actions.append(Action(action))
         return all_actions
         
-def generate_weight_list():
-    values = [round(i * 0.2, 2) for i in range(6)]
+def generate_weight_list(num):
+    values = [round(i * 1/num, 2) for i in range(num+1)]
     return [[x,y,z] for x,y,z in itertools.product(values, repeat=3) if round(x+y+z,10)==1.0]
 
 def generate_all_states():
-    weight_list = generate_weight_list()
+    weight_list = generate_weight_list(2)
     all_states = []
     for env in weight_list:
         for user in weight_list:
@@ -62,11 +62,11 @@ def pdf_list(mean, sigma, weight_list):  # 確率密度関数の生成
     return normalized_probabilities
 
 class TransitionModel:
-    def __init__(self, sigma=0.1,alpha=0.8,beta=0.8):
+    def __init__(self, sigma=1,alpha=0.8,beta=0.8):
         self.sigma = sigma # 分散
         self.alpha = alpha # 重み
         self.beta  = beta  # 重み
-        self.state_list = generate_weight_list()    # 状態のリストを生成
+        self.state_list = generate_weight_list(2)    # 状態のリストを生成
 
     def probability(self, next_state, state, action, device="cpu"):
         """According to problem spec, the world resets once
@@ -101,7 +101,7 @@ class TransitionModel:
 class RewardModel:
     def reward_func(self,state,action):
         mse = mean_squared_error(state.user, action.action)
-        return -mse
+        return -mse*1000
 
 class MDP:
     def __init__(self,state,action):
@@ -112,17 +112,13 @@ class MDP:
         self.all_states = self.state.get_all_states()
         self.all_actions = self.action.get_all_actions()
         
-    def ValueIteration(self,threshold=1e-3,discount_factor=0.9):  # 価値反復法
-        # デバイスの設定
-        torch.set_default_dtype(torch.float32)
-        device = "cuda" if torch.cuda.is_available() else "cpu"
-        torch.set_default_device(device)
-        
-        V = {s: 0 for s in self.all_states}  # 価値関数の初期化
+    def ValueIteration(self,threshold=1e-3,discount_factor=0.9,max_count = 500):  # 価値反復法
+        V = {s: 0.0 for s in self.all_states}  # 価値関数の初期化
         policy  = {s: None for s in self.all_states}  # 方策の初期化
         
         while True:
             delta = 0
+            count = 0
             with tqdm(total=len(self.all_states)) as pbar:
                 for s in self.all_states:
                     v = V[s]
@@ -145,13 +141,22 @@ class MDP:
                     policy[s] = best_action
                     delta  = max(delta, abs(v - V[s]))
                     pbar.update(1)
-            if delta < threshold:
+            count += 1
+            if delta < threshold or count > max_count:
                 break
         return V, policy
 
-state = State([0.4,0.4,0.2],[0.2,0.6,0.2])
-action = Action([0.2,0.6,0.2])
-mdp = MDP(state,action)
-V, policy = mdp.ValueIteration()
-print("Value Function:", V)
-print("Policy:", policy)
+if __name__ == "__main__":
+    # デバイスの設定
+    torch.set_default_dtype(torch.float64)
+    #device = "cuda" if torch.cuda.is_available() else "cpu"
+    device = "cpu"
+    torch.set_default_device(device)
+    print("Device:", device)
+        
+    state = State([0,0.5,0.5],[0,1,0])
+    action = Action([0,1,0])
+    mdp = MDP(state,action)
+    V, policy = mdp.ValueIteration()
+    print("Value Function:", V)
+    print("Policy:", policy)
