@@ -119,14 +119,15 @@ class Model():
         normalized_probabilities = torch.tensor([prob / sum(probabilities) for prob in probabilities])
         return normalized_probabilities
     
-    def update_belief(self):
+    def update_belief(self,belief):
+        # 入力には[a_{t-1},o_{t-1}]のときの信念b(s):[s]が入る
         # 正規化項 reg
-        sum_s1 = torch.einsum("ij,i->j",self.trans_prob,self.belief).repeat(self.num_actions,1)     # [s,s'] * [s] -> [s']  -> [a,s'] (整形)
-        sum_s2 = torch.einsum("ij,jkl->ikl",self.trans_prob,self.obs_prob)                          # [s,s''] * [s'',a,o] -> [s,a,o]
-        reg = torch.einsum("j,jkl->kl",self.belief,sum_s2)                                          # [s] * [s,a,o] -> [a,o]
+        sum_s1 = torch.einsum("ij,i->j",self.trans_prob,belief).repeat(self.num_actions,1)     # [s,s'] * [s] -> [s']  -> [a,s'] (整形)
+        sum_s2 = torch.einsum("ij,jkl->ikl",self.trans_prob,self.obs_prob)                     # [s,s''] * [s'',a,o] -> [s,a,o]
+        reg = torch.einsum("j,jkl->kl",belief,sum_s2)                                          # [s] * [s,a,o] -> [a,o]
         
         # 信念の更新
-        belief = torch.einsum("sao,as->aos",self.trans_prob,sum_s1) / reg                           # [s,a,o] / [a,o] -> [a,o,s]       
+        belief = torch.einsum("sao,as->aos",self.trans_prob,sum_s1) / reg                      # [s,a,o] / [a,o] -> [a,o,s]       
         
         return belief
 
