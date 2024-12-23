@@ -1,5 +1,6 @@
 import pomdp_py
 from pomdp_py.utils import TreeDebugger
+from value_iteration import ValueIteration
 import random
 import torch
 import sys
@@ -13,10 +14,12 @@ import statistics
 import numpy as np
 import psutil
 from pomdp_py.utils import TreeDebugger
-import torch.multiprocessing as mp
 from pomdp_py.framework.planner import Planner
 from pomdp_py.framework.basics import Agent, Action, State
-from pomdp_py.representations.distribution.histogram import Histogram
+
+"""
+各クラスの詳細 : pomdp_py.framework.basics
+"""
 
 class Model_State(pomdp_py.State):
     """
@@ -46,26 +49,31 @@ class Model_State(pomdp_py.State):
         self.follows = torch.tensor([0, 1])
 
     def __hash__(self):
-        return hash(tuple(self.state))
+        #print("type(self.state):",type(tuple(self.state)))
+        return hash((tuple(self.attention.tolist()), self.comfort, self.follow))
 
     def __eq__(self, other):
-        if isinstance(other, Model_State):
-            return torch.equal(self.attention,other.attention) and self.comfort == other.comfort and self.follow == other.follow
-        return False
+        if not isinstance(other, Model_State):
+            return False
+        else:
+            return (torch.equal(self.attention,other.attention) and 
+                                self.comfort == other.comfort and 
+                                self.follow == other.follow)
 
     def __str__(self):  # クラスの中身を表示
-        return "attention:" + str(self.attention) + " comfort:" + str(self.comfort) + " follow:" + str(self.follow)
+        return "Model_State(attention=%s, comfort=%s, follow = %s)" % (self.attention.tolist(), self.comfort, self.follow)
 
     def __repr__(self):
-        return "Model_State(attention=%s, comfort=%s, follow = %s)" % (self.attention, self.comfort, self.follow)
+        return "Model_State(attention=%s, comfort=%s, follow = %s)" % (self.attention.tolist(), self.comfort, self.follow)
     
     def get_all_states(self):
         """Only need to implement this if you're using
         a solver that needs to enumerate over the state space (e.g. value iteration)
         """
-        return generate_state_space(self.attentions, self.comforts, self.follows)
-    
-        
+        state_list =  generate_state_space(self.attentions, self.comforts, self.follows)
+        state_space = [Model_State(s) for s in state_list]
+        return state_space
+
 class Model_Action(pomdp_py.Action):
     """
     Action = {
@@ -110,11 +118,11 @@ class Model_Observation(pomdp_py.Observation):
         self.n = n_people
 
     def __hash__(self):
-        return hash(tuple(self.sight_direction))
+        return hash(tuple(self.sight_direction.tolist()))
 
     def __eq__(self, other):
         if isinstance(other, Model_Observation):
-            return self.sight_direction == other.sight_direction
+            return torch.equal(self.sight_direction , other.sight_direction)
         return False
 
     def __str__(self):
@@ -168,14 +176,14 @@ class ObservationModel(pomdp_py.ObservationModel):
     def probability(self, obs, next_state, action):  # follow = 1
         if next_state.follow == 1:
             normalized_prob = pdf_list(action.enhance_weight, self.sigma, self.obs_list)
-            sight_prob_follow = normalized_prob[self.obs_list.index(obs.sight_direction)]  # 観測確率
+            sight_prob_follow = normalized_prob[self.obs_list.tolist().index(obs.sight_direction.tolist())]  # 観測確率   # .index使うためにリストに変換
             return sight_prob_follow
         elif next_state.follow == 0:
             normalized_prob = pdf_list(next_state.attention, self.sigma, self.obs_list)
-            sight_prob_not_follow = normalized_prob[self.obs_list.index(obs.sight_direction)]  # 観測確率
+            sight_prob_not_follow = normalized_prob[self.obs_list.tolist().index(obs.sight_direction.tolist())]  # 観測確率
             return sight_prob_not_follow
 
-    def sample(self, next_state, action):  # 観測のサンプリング
+    def sample(self, next_state, action):  # 観測のサンプリング, 実データで学習する場合は、ここに実データを入れる?
         if next_state.follow == 1:
             normalized_prob = pdf_list(action.enhance_weight, self.sigma, self.obs_list)
             sight_sample_follow = self.obs_list[torch.multinomial(torch.tensor(normalized_prob), 1).item()]
@@ -210,12 +218,12 @@ class TransitionModel(pomdp_py.TransitionModel):
         action is open-left/open-right. Otherwise, stays the same"""
         # attention
         normalized_prob = pdf_list(next_state.attention, self.sigma, self.attention_list)
-        attention_trans_prob = normalized_prob[self.attention_list.index(next_state.attention)]
+        attention_trans_prob = normalized_prob[self.attention_list.tolist().index(next_state.attention.tolist())]
         #print("next_env_probability:", next_env_probability)
         
         # 現状態と次状態のインデックスを取得
-        current_index = state.comfort * 2 + state.follow
-        next_index = next_state.comfort * 2 + next_state.follow
+        current_index = int(state.comfort * 2 + state.follow)
+        next_index = int(next_state.comfort * 2 + next_state.follow)
         
         # othersの遷移確率
         others_trans_prob = self.others_trans_prob_table[current_index,next_index]
@@ -260,13 +268,13 @@ class PolicyModel(pomdp_py.RolloutPolicy):  # 方策モデル
         self.step = step
         self.n = num_people
         
-        """A simple policy model with uniform prior over a
-        small, finite action space"""
+        """A simple policy model with uniform prior over a small, finite action space"""
 
         self.weight_list = generate_weight_list(self.step,self.n)
         self.ACTIONS = [Model_Action(s) for s in self.weight_list]  # 行動の選択肢
 
     def sample(self, state):
+        # action はランダムにサンプリング
         return random.sample(self.get_all_actions(), 1)[0]
 
     def rollout(self, state, history=None):
@@ -321,9 +329,9 @@ def test_planner(model_problem, planner, nsteps=3, debug_tree=False):
     Runs the action-feedback loop of Tiger problem POMDP
 
     Args:
-        model_problem (TigerProblem): a problem instance
-        planner (Planner): a planner
-        nsteps (int): Maximum number of steps to run this loop.
+        model_problem : Model_Problem instance
+        planner (Planner): planner
+        nsteps (int) : 最大ステップ数
         debug_tree (bool): True if get into the pdb with a
                            TreeDebugger created as 'dd' variable.
     """
@@ -344,8 +352,8 @@ def test_planner(model_problem, planner, nsteps=3, debug_tree=False):
         )
         print("Reward:", reward)
 
-        # 観測も得る
-        real_observation = Model_Observation(model_problem.env.state.attention)
+        # 観測のサンプリング
+        real_observation = ObservationModel().sample(model_problem.env.state,model_problem.env.action)
         print(">> Observation:", real_observation)
         model_problem.agent.update_history(action, real_observation)
 
@@ -386,8 +394,13 @@ def make_model(init_state=[0,1,0,1,1], init_belief=[0.8,0.2],step=1,num_people=3
 
 
 def main():
+    # Set default device and dtype
+    device = "cpu"
+    torch.set_default_device(device)
+    torch.set_default_dtype(torch.float32)
+    
     init_true_state = [0,1,0,1,1]
-    init_belief = pomdp_py.Histogram(
+    init_belief = pomdp_py.Histogram( 
         {Model_State([0,1,0,1,1]): 0.8, Model_State([0,1,0,0,1]): 0.2}
     )
     # ハイパラの設定
@@ -398,7 +411,8 @@ def main():
     
     # 三つのプランナーを比較
     print("** Testing value iteration **")  # 価値反復法
-    vi = pomdp_py.ValueIteration(horizon=3, discount_factor=0.95)
+    vi = ValueIteration(horizon=3, discount_factor=0.9)
+    print("start test_planner")
     test_planner(model, vi, nsteps=10)
     """
     print("\n** Testing POUCT **")
