@@ -93,9 +93,9 @@ class ValueIteration(Planner):
         states = agent.all_states
         observations = agent.all_observations  # we expect observations to be indexed
 
-        print(f"Building policy trees at depth {depth}")
+        #print(f"Building policy trees at depth {depth}")
         if depth >= self._planning_horizon or self._discount_factor**depth < self._epsilon:  # 終了条件,  探索深さが予め指定した深さを超えたら終了
-            print(f"Reached terminal depth {depth}")
+            #print(f"Reached terminal depth {depth}")
             return [_PolicyTreeNode(a, depth, agent, self._discount_factor)
                     for a in actions]
         else:
@@ -104,12 +104,10 @@ class ValueIteration(Planner):
             # 各観測ごとに1つのサブポリシーツリーを組み合わせることにで形成される
             # これらのサブポリシーツリーの集合のデカルト積を取り、個々のポリシーツリーを構築
             groups = []
-            with tqdm(total=len(observations), desc="Processing observations (o)", leave=False) as pbar_groups:
-                for _ in range(len(observations)):
-                    group = self._build_policy_trees(depth+1, agent)
-                    groups.append(group)
-                    pbar_groups.update(1)
-            print(f"groups at depth {depth}:", groups)
+            for _ in range(len(observations)):
+                group = self._build_policy_trees(depth+1, agent)
+                groups.append(group)
+            #print(f"groups at depth {depth}:", groups)
             # (Sanity check) We expect all groups to have same size
             group_size = len(groups[0])
             #print("group_size:", group_size)
@@ -119,11 +117,12 @@ class ValueIteration(Planner):
             # This computes all combinations of sub policy trees. Each combination
             # will become one policy tree that will be returned, with an action to
             # take at the current depth level as the root.
-            combinations = itertools.product(*([torch.arange(group_size)]*len(observations)))  # 返り値はtuple
+            combinations = list(itertools.product(*([range(group_size)]*len(observations))) ) # 返り値はtuple
+            #print(f"combinations at depth {depth} : {list(combinations)}")
             policy_trees = []
-            count = 0
-            with tqdm(total=len(list(combinations)), desc="Processing combinations", leave=False) as pbar_comb:
+            with tqdm(total=len(combinations), desc="Building policy trees", leave=True) as pbar_comb:
                 for comb in combinations:
+                    #print("comb:", comb)
                     # comb is a tuple of indicies, e.g. (i, j, k) that means
                     # for observation 0, the sub policy tree is at index i of its group;
                     # for observation 1, the sub policy tree is at index j of its group, etc.
@@ -132,6 +131,9 @@ class ValueIteration(Planner):
                     children = {}
                     for oi in range(len(comb)):
                         #print("oi:", oi)
+                        #print("groups[oi]:", groups[oi])
+                        #print("comb[oi]:", comb[oi])
+                        #print("groups[oi][comb[oi]]:", groups[oi][comb[oi]])
                         sub_policy_tree = groups[oi][comb[oi]]
                         obs_key = observations[oi]
                         children[obs_key] = sub_policy_tree
@@ -142,8 +144,9 @@ class ValueIteration(Planner):
                     for a in actions:
                         policy_tree_node = _PolicyTreeNode(
                             a, depth, agent, self._discount_factor, children=children)
+                        #print("policy_tree_node:", policy_tree_node)
                         policy_trees.append(policy_tree_node)
-                    count += 1
                     pbar_comb.update(1)
-            print(f"policy_trees at depth {depth} : {policy_trees}")
+                #print(f"policy_trees at depth {depth} : {policy_trees}")
+                
             return policy_trees
