@@ -76,15 +76,21 @@ class ValueIteration(Planner):
         """plan(self, agent)
         Plans an action."""
         policy_trees = self._build_policy_trees(1, agent)
-        print("policy_trees:", policy_trees)
         value_beliefs = {}
         for p, policy_tree in enumerate(policy_trees):
             value_beliefs[p] = 0
             for state in agent.all_states:
-                value_beliefs[p] += agent.cur_belief[state] * policy_tree.values[state]
+                belief_value = agent.cur_belief[state]
+                policy_tree_value = policy_tree.values[state]
+                if isinstance(belief_value, torch.Tensor):
+                    belief_value = belief_value.item()
+                if isinstance(policy_tree_value, torch.Tensor):
+                    policy_tree_value = policy_tree_value.item()
+                value_beliefs[p] += belief_value*policy_tree_value
         # Pick the policy tree with highest belief value
-        print("value_beliefs:", value_beliefs)
+        #print("value_beliefs:", value_beliefs)
         pmax = max(value_beliefs, key=value_beliefs.get)
+        #print("action dtype:", type(policy_trees[pmax].action))
         return policy_trees[pmax].action
 
     def _build_policy_trees(self, depth, agent):
@@ -144,9 +150,7 @@ class ValueIteration(Planner):
                     for a in actions:
                         policy_tree_node = _PolicyTreeNode(
                             a, depth, agent, self._discount_factor, children=children)
-                        #print("policy_tree_node:", policy_tree_node)
                         policy_trees.append(policy_tree_node)
                     pbar_comb.update(1)
-                #print(f"policy_trees at depth {depth} : {policy_trees}")
                 
             return policy_trees
