@@ -14,11 +14,10 @@ import statistics
 import numpy as np
 import psutil
 from pomdp_py.utils import TreeDebugger
-from pomdp_py.framework.planner import Planner
-from pomdp_py.framework.basics import Agent, Action, State
 
 """
 各クラスの詳細 : pomdp_py.framework.basics
+update belief : pomdp_py.representations.belief.histogram
 """
 
 class Model_State(pomdp_py.State):
@@ -96,7 +95,7 @@ class Model_Action(pomdp_py.Action):
         return False
 
     def __str__(self):
-        return self.enhance_weight
+        return "enhance_weight : %s" % self.enhance_weight.tolist()
 
     def __repr__(self):
         return "Model_Action(%s)" % self.enhance_weight
@@ -353,13 +352,13 @@ def test_planner(model_problem, planner, nsteps=3, debug_tree=False):
         print("Reward:", reward)
 
         # 観測のサンプリング
-        real_observation = ObservationModel().sample(model_problem.env.state,model_problem.env.action)
+        real_observation = model_problem.agent.observation_model.sample(model_problem.env.state, action)
         print(">> Observation:", real_observation)
         model_problem.agent.update_history(action, real_observation)
 
-        # Update the belief. If the planner is POMCP, planner.update　also automatically updates agent belief.
         # 信念の更新  # planner.updateはPOMCPの場合、エージェントの信念も自動的に更新する
-        planner.update(model_problem.agent, action, real_observation)
+        # 現在は後の update_histogram_belief で信念を更新しているため、いらない
+        #planner.update(model_problem.agent, action, real_observation)
         
         # Print some info about the planner
         if isinstance(planner, pomdp_py.POUCT):
@@ -367,11 +366,12 @@ def test_planner(model_problem, planner, nsteps=3, debug_tree=False):
             print("Plan time: %.5f" % planner.last_planning_time)
 
         # Print the tree
+        # update belief
         if isinstance(model_problem.agent.cur_belief, pomdp_py.Histogram):
             new_belief = pomdp_py.update_histogram_belief(
                 model_problem.agent.cur_belief,
-                action.tolist(),
-                real_observation.tolist(),
+                action,
+                real_observation,
                 model_problem.agent.observation_model,
                 model_problem.agent.transition_model,
             )
@@ -411,7 +411,7 @@ def main():
     
     # 三つのプランナーを比較
     print("** Testing value iteration **")  # 価値反復法
-    vi = ValueIteration(horizon=3, discount_factor=0.9)
+    vi = ValueIteration(horizon=2, discount_factor=0.9)
     print("start test_planner")
     test_planner(model, vi, nsteps=10)
     """
@@ -453,34 +453,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-"""
-state = Model_State([0.4,0.3,0.3],[0.4,0.3,0.3])
-next_state = Model_State([0.4,0.3,0.3],[0.4,0.3,0.3])
-action = Model_Action([0.3,0.4,0.3])
-observation = Model_Observation([0.3,0.4,0.3],[0.3,0.4,0.3])
-obs_noise = 0.05
-init_true_state = Model_State([0.4,0.3,0.3],[0.4,0.3,0.3])    # 初期状態
-init_belief = pomdp_py.Histogram({Model_State([0.4,0.3,0.3],[0.4,0.3,0.3]):0.5, Model_State([0.3,0.4,0.3],[0.3,0.4,0.3]):0.5})  # 初期信念
-
-
-observation_model = ObservationModel()
-transition_model = TransitionModel()
-reward_model = RewardModel()
-policy_model = PolicyModel()
-model_problem = Model_Problem(obs_noise, init_true_state, init_belief)
-test_planner(model_problem, pomdp_py.POUCT(), nsteps=3, debug_tree=False)
-
-
-#print("observation_probability :",observation_model.probability(observation, next_state, action))
-#print("observation_sample", observation_model.sample(next_state, action))
-#print("transition_probability :",transition_model.probability(next_state, state, action))
-#print("transition_sample :", transition_model.sample(state, action))
-#print("reward_sample :", reward_model._reward_func(state, action))
-#print("policy_sample :", policy_model.sample(state))
-
-model_problem = Model_Problem(obs_noise, init_true_state, init_belief)
-print("model_problem :", model_problem)
-print("model_problem.agent :", model_problem.agent)
-model = make_model()
-print("model :", model)
-"""
