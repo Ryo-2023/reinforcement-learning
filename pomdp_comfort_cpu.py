@@ -268,7 +268,6 @@ class TransitionModel(pomdp_py.TransitionModel):
         # サンプリング結果
         return Model_State(next_attention, next_comfort, next_follow)
     
-    @property
     def get_all_states(self):
         state_space = generate_state_space(self.attention_list, self.comforts, self.follows)
         STATES = [Model_State(s) for s in state_space]
@@ -412,7 +411,7 @@ def make_model(init_state=[0,1,0,1,1], init_belief=None,step=1,num_people=3):
     # 一様分布で信念を初期化
     all_states = Model_State().get_all_states()
     uniform_prob = 1.0 / len(all_states)
-    belief_dict = {Model_State(s) : uniform_prob for s in all_states}
+    belief_dict = {s : uniform_prob for s in all_states}
     
     model = Model_Problem(
         Model_State(init_state),
@@ -436,7 +435,7 @@ def main():
     # 一様分布で信念を初期化
     all_states = Model_State().get_all_states()
     uniform_prob = 1.0 / len(all_states)
-    belief_dict = {Model_State(s) : uniform_prob for s in all_states}
+    belief_dict = {s : uniform_prob for s in all_states}
     
     # 特定の状態の信念を変更
     belief_dict[Model_State([0,1,0,1,1])] = 0.7
