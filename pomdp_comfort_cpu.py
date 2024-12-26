@@ -3,17 +3,10 @@ from pomdp_py.utils import TreeDebugger
 from value_iteration import ValueIteration
 import random
 import torch
-import sys
-import copy
-import scipy
-import sklearn.metrics
 import itertools
-import ast
 from tqdm import tqdm
-import statistics
-import numpy as np
-import psutil
 from pomdp_py.utils import TreeDebugger
+import pickle
 
 """
 各クラスの詳細 : pomdp_py.framework.basics
@@ -24,13 +17,26 @@ class Model_State(pomdp_py.State):
     """
     state =
     {
-        "environment":{
-            "speaking_activity" : 発話活性度 * 視界の人数  ex.) [0.15,0.8,0.15] }
-        "user": {
-            "attention_weight" : ユーザーの注意の向き方 * 視界の人数 ex.) [0.15,0.8,0.15] }
+        "attention": ユーザーの注意の向き方 
+        "comfort"  : 快適度
+        "follow"   : システムに従うかどうか
+        "state_space": 状態空間
+        states: ([[0., 0., 1., 0., 0.],
+                 [0., 0., 1., 0., 1.],
+                 [0., 0., 1., 1., 0.],
+                 [0., 0., 1., 1., 1.],
+                 [0., 1., 0., 0., 0.],
+                 [0., 1., 0., 0., 1.],
+                 [0., 1., 0., 1., 0.],
+                 [0., 1., 0., 1., 1.],
+                 [1., 0., 0., 0., 0.],
+                 [1., 0., 0., 0., 1.],
+                 [1., 0., 0., 1., 0.],
+                 [1., 0., 0., 1., 1.]]) shape:(12, 5)
+        } 
     }
     """
-    def __init__(self, state,step=1,n_people=3):
+    def __init__(self, state = [0,1,0,1,1],step=1,n_people=3):
         self.step = step
         self.n = n_people
         
@@ -46,6 +52,7 @@ class Model_State(pomdp_py.State):
         self.attentions = generate_weight_list(self.step,self.n)
         self.comforts = torch.tensor([0, 1])
         self.follows = torch.tensor([0, 1])
+        self.states = generate_state_space(self.attentions, self.comforts, self.follows)
 
     def __hash__(self):
         #print("type(self.state):",type(tuple(self.state)))
@@ -72,6 +79,9 @@ class Model_State(pomdp_py.State):
         state_list =  generate_state_space(self.attentions, self.comforts, self.follows)
         state_space = [Model_State(s) for s in state_list]
         return state_space
+    
+    def num_states(self):
+        return len(self.get_all_states())
 
 class Model_Action(pomdp_py.Action):
     """
@@ -84,7 +94,7 @@ class Model_Action(pomdp_py.Action):
             enhance_weight = torch.tensor(enhance_weight)
             
         self.enhance_weight = enhance_weight
-        self.step = step
+        self.step = step   # 行動空間の生成
 
     def __hash__(self):
         return hash(self.enhance_weight)
@@ -100,6 +110,13 @@ class Model_Action(pomdp_py.Action):
     def __repr__(self):
         return "Model_Action(%s)" % self.enhance_weight
     
+    def get_all_actions(self):
+        action_list = generate_weight_list(step=self.step)
+        ACTIONS = [Model_Action(a) for a in action_list]
+        return ACTIONS
+          
+    def num_actions(self):
+        return len(self.get_all_actions())
     
 class Model_Observation(pomdp_py.Observation):
     """
@@ -115,6 +132,7 @@ class Model_Observation(pomdp_py.Observation):
         self.sight_direction = sight_direction
         self.step = step
         self.n = n_people
+        self.obs_space = generate_weight_list(self.step,self.n)    # 観測空間の生成
 
     def __hash__(self):
         return hash(tuple(self.sight_direction.tolist()))
@@ -128,7 +146,7 @@ class Model_Observation(pomdp_py.Observation):
         return "sight_direction:" + str(self.sight_direction)
 
     def __repr__(self):
-        return "Model_Observation(%s)" % self.sight_direction
+        return "Model_Observation(%s)" % self.sight_direction.tolist()
     
     def get_all_observations(self):
         """Only need to implement this if you're using
@@ -139,6 +157,9 @@ class Model_Observation(pomdp_py.Observation):
         for obs in all_obs:
             all_observations.append(Model_Observation(obs))
         return all_observations
+    
+    def get_num_observations(self):
+        return len(self.get_all_observations())
     
 def generate_weight_list(step=1,n_people=3):
     values = [round(i * 1/step, 2) for i in range(step+1)]  # {0,1}
@@ -247,6 +268,7 @@ class TransitionModel(pomdp_py.TransitionModel):
         # サンプリング結果
         return Model_State(next_attention, next_comfort, next_follow)
     
+    @property
     def get_all_states(self):
         state_space = generate_state_space(self.attention_list, self.comforts, self.follows)
         STATES = [Model_State(s) for s in state_space]
@@ -306,24 +328,27 @@ class Model_Problem(pomdp_py.POMDP):
         env = pomdp_py.Environment(init_true_state, TransitionModel(), RewardModel())
         super().__init__(agent, env, name="Model_Problem")
 
+        """
         @staticmethod
         def create(state=[0,1,0,1,1], belief=0.8):
-            """
+            
             Args:
                 belief (float): Initial belief that the target is
                                 on the left; Between 0-1.
                 obs_noise (float): Noise for the observation
                                 model (default 0.15)
-            """
+            
             init_true_state = Model_State(state)
+            belief = 0.8
             init_belief = pomdp_py.Histogram(
-                {Model_Problem([0,1,0,1,1]) : belief, Model_Problem([0,1,0,0,1]) : 1-belief}
+                {Model_Problem([0,1,0,1,1]) : belief, Model_Problem([0,1,0,0,1]) : 1-belief},
             )
             model_problem = Model_Problem(init_true_state, init_belief)
             model_problem.agent.set_belief(init_belief, prior=True)
             return model_problem
+        """
         
-def test_planner(model_problem, planner, nsteps=3, debug_tree=False):
+def test_planner(model_problem, planner, obs_data = None, nsteps=3, debug_tree=True):
     """
     Runs the action-feedback loop of Tiger problem POMDP
 
@@ -352,7 +377,11 @@ def test_planner(model_problem, planner, nsteps=3, debug_tree=False):
         print("Reward:", reward)
 
         # 観測のサンプリング
-        real_observation = model_problem.agent.observation_model.sample(model_problem.env.state, action)
+        # 入力の観測データがある場合は、それを使い、ない場合は観測モデルからサンプリング
+        if obs_data is not None:
+            real_observation = obs_data[i]
+        else:
+            real_observation = model_problem.env.observation_model.sample(model_problem.env.state, action)
         print(">> Observation:", real_observation)
         model_problem.agent.update_history(action, real_observation)
 
@@ -377,16 +406,17 @@ def test_planner(model_problem, planner, nsteps=3, debug_tree=False):
             )
             model_problem.agent.set_belief(new_belief)
 
-def make_model(init_state=[0,1,0,1,1], init_belief=[0.8,0.2],step=1,num_people=3):
+def make_model(init_state=[0,1,0,1,1], init_belief=None,step=1,num_people=3):
     """model_domain の作成に便利"""
+    # 初期信念の設定
+    # 一様分布で信念を初期化
+    all_states = Model_State().get_all_states()
+    uniform_prob = 1.0 / len(all_states)
+    belief_dict = {Model_State(s) : uniform_prob for s in all_states}
+    
     model = Model_Problem(
         Model_State(init_state),
-        pomdp_py.Histogram(
-            {
-                Model_State([0,1,0,1,1]): init_belief[0],
-                Model_State([0,1,0,0,1]): init_belief[1],
-            }
-        ),
+        pomdp_py.Histogram(belief_dict) if init_belief is None else pomdp_py.Histogram(init_belief),  # 初期信念
         step,
         num_people
     )
@@ -399,21 +429,45 @@ def main():
     torch.set_default_device(device)
     torch.set_default_dtype(torch.float32)
     
+    # 初期状態の設定
     init_true_state = [0,1,0,1,1]
-    init_belief = pomdp_py.Histogram( 
-        {Model_State([0,1,0,1,1]): 0.8, Model_State([0,1,0,0,1]): 0.2}
-    )
+    
+    # 初期信念の設定
+    # 一様分布で信念を初期化
+    all_states = Model_State().get_all_states()
+    uniform_prob = 1.0 / len(all_states)
+    belief_dict = {Model_State(s) : uniform_prob for s in all_states}
+    
+    # 特定の状態の信念を変更
+    belief_dict[Model_State([0,1,0,1,1])] = 0.7
+    belief_dict[Model_State([0,1,0,0,1])] = 0.2
+    
+    # 確率の正規化
+    total_prob = sum(belief_dict.values())
+    for p in belief_dict:
+        belief_dict[p] /= total_prob
+        
+    # 初期信念の設定
+    init_belief = pomdp_py.Histogram(belief_dict)
+    
+    # 観測データ
+    file_path = "E:/sotsuron/venv_sotsuron/src/test_data.pkl"
+    with open(file_path, "rb") as f:
+        data = pickle.load(f)
+    obs_data = [Model_Observation(d) for d in data]
+    
     # ハイパラの設定
     step = 1
     num_people = 3
     model = make_model(init_state=init_true_state,step=step,num_people=num_people)
     init_belief = model.agent.belief
+    nsteps = len(obs_data) if obs_data is not None else 10
     
     # 三つのプランナーを比較
     print("** Testing value iteration **")  # 価値反復法
-    vi = ValueIteration(horizon=2, discount_factor=0.9)
+    vi = ValueIteration(horizon=2, discount_factor=0.9)  # horizon:探索深度, horizon=3 にすると計算量が発散するためやめましょう
     print("start test_planner")
-    test_planner(model, vi, nsteps=10)
+    test_planner(model, vi, obs_data, nsteps)  # nsteps:学習回数
     """
     print("\n** Testing POUCT **")
     
