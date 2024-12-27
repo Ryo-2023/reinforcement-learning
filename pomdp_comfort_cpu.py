@@ -7,6 +7,8 @@ import itertools
 from tqdm import tqdm
 from pomdp_py.utils import TreeDebugger
 import pickle
+import torch.nn.functional as F
+import time
 
 """
 各クラスの詳細 : pomdp_py.framework.basics
@@ -278,6 +280,7 @@ class RewardModel(pomdp_py.RewardModel):
     def _reward_func(self, state, action):
         # 損失関数を定義
         return state.comfort
+        #return -(F.mse_loss(state.attention, action.enhance_weight)).item()
 
     def sample(self, state, action, next_state):
         # deterministic
@@ -347,7 +350,7 @@ class Model_Problem(pomdp_py.POMDP):
             return model_problem
         """
         
-def test_planner(model_problem, planner, obs_data = None, nsteps=3, debug_tree=True):
+def test_planner(model_problem, planner, obs_data = None, nsteps=3, debug_tree=True,file_name_state = None, file_name_belief = None, file_name_action = None):
     """
     Runs the action-feedback loop of Tiger problem POMDP
 
@@ -358,7 +361,13 @@ def test_planner(model_problem, planner, obs_data = None, nsteps=3, debug_tree=T
         debug_tree (bool): True if get into the pdb with a
                            TreeDebugger created as 'dd' variable.
     """
+    # データリストの初期化
+    data_state = []
+    data_belief = []
+    data_action = []
+    
     for i in range(nsteps):
+        start_time = time.time()
         action = planner.plan(model_problem.agent)
         if debug_tree:
             from pomdp_py.utils import TreeDebugger
@@ -367,6 +376,17 @@ def test_planner(model_problem, planner, obs_data = None, nsteps=3, debug_tree=T
         print(f"True state: {model_problem.env.state}")
         print(f"Belief: {model_problem.agent.cur_belief}")
         print(f"Action: {action}")
+        
+        # Save data
+        
+        data_state.append(model_problem.env.state.state.tolist())
+        data_action.append(action.enhance_weight.tolist())
+        
+        # 保存用にデータ形式の変換
+        convert_belief = {}
+        for s,p in model_problem.agent.cur_belief.histogram.items():
+            convert_belief[str(s.state.tolist())] = float(p)
+        data_belief.append(convert_belief)
         
         # actionを実行して報酬を得る
         #reward = model_problem.env.state_transition(action, execute=True)  # 行動によって状態が変化する場合
@@ -404,6 +424,18 @@ def test_planner(model_problem, planner, obs_data = None, nsteps=3, debug_tree=T
                 model_problem.agent.transition_model,
             )
             model_problem.agent.set_belief(new_belief)
+            
+        end_time = time.time()
+        epoch_time = end_time - start_time
+        print(f"epoch_time:{epoch_time:.4f} s")
+    
+    # データの保存
+    if file_name_state is not None:
+        save_data(data_state,file_name_state)
+    if file_name_belief is not None:
+        save_data(data_belief,file_name_belief)
+    if file_name_action is not None:
+        save_data(data_action,file_name_action)
 
 def make_model(init_state=[0,1,0,1,1], init_belief=None,step=1,num_people=3):
     """model_domain の作成に便利"""
@@ -421,12 +453,20 @@ def make_model(init_state=[0,1,0,1,1], init_belief=None,step=1,num_people=3):
     )
     return model
 
+def save_data(data,file_name):
+    with open(file_name, "wb") as f:
+        pickle.dump(data, f)
 
 def main():
     # Set default device and dtype
     device = "cpu"
     torch.set_default_device(device)
     torch.set_default_dtype(torch.float32)
+    
+    # set save file name
+    file_name_state = "E:/sotsuron/venv_sotsuron/src/data/data_state.pkl"
+    file_name_belief = "E:/sotsuron/venv_sotsuron/src/data/data_belief.pkl"
+    file_name_action = "E:/sotsuron/venv_sotsuron/src/data/data_action.pkl"
     
     # 初期状態の設定
     init_true_state = [0,1,0,1,1]
@@ -450,7 +490,7 @@ def main():
     init_belief = pomdp_py.Histogram(belief_dict)
     
     # 観測データ
-    file_path = "E:/sotsuron/venv_sotsuron/src/test_data.pkl"
+    file_path = "E:/sotsuron/venv_sotsuron/src/data/test_data.pkl"
     with open(file_path, "rb") as f:
         data = pickle.load(f)
     obs_data = [Model_Observation(d) for d in data]
@@ -465,8 +505,11 @@ def main():
     # 三つのプランナーを比較
     print("** Testing value iteration **")  # 価値反復法
     vi = ValueIteration(horizon=2, discount_factor=0.9)  # horizon:探索深度, horizon=3 にすると計算量が発散するためやめましょう
+    all_start_time = time.time()
     print("start test_planner")
-    test_planner(model, vi, obs_data, nsteps)  # nsteps:学習回数
+    test_planner(model, vi, obs_data, nsteps,None,file_name_state,file_name_belief,file_name_action)  # nsteps:学習回数
+    all_end_time = time.time()
+    print(f"all_time:{all_end_time - all_start_time:.4f} s")
     """
     print("\n** Testing POUCT **")
     

@@ -3,6 +3,8 @@ from pomdp_py.framework.basics import Agent, Action, State
 import torch
 import itertools
 from tqdm import tqdm
+import pickle
+
 class _PolicyTreeNode:
     def __init__(self, action, depth, agent,
                  discount_factor, children={}):
@@ -24,6 +26,7 @@ class _PolicyTreeNode:
 
         discount_factor = self._discount_factor**self.depth
         values = {}
+        # V(s) = Σ_s' Σ_o p(s'|s,a)*p(o|s',a)*[R(s,a,s') + γV(s')]
         with tqdm(total=len(states), desc="Processing states (s)", leave=False) as pbar_s:
             for s in states:
                 expected_future_value = 0.0
@@ -34,7 +37,6 @@ class _PolicyTreeNode:
                                 trans_prob = self._agent.transition_model.probability(sp, s, self.action)
                                 obsrv_prob = self._agent.observation_model.probability(o, sp, self.action)
                                 if len(self.children) > 0:
-                                    #print("sp:", sp)
                                     if sp in self.children[o].values:
                                         subtree_value = self.children[o].values[sp]  # corresponds to V_{oi(p)} in paper
                                     else:
@@ -88,9 +90,8 @@ class ValueIteration(Planner):
                     policy_tree_value = policy_tree_value.item()
                 value_beliefs[p] += belief_value*policy_tree_value
         # Pick the policy tree with highest belief value
-        #print("value_beliefs:", value_beliefs)
         pmax = max(value_beliefs, key=value_beliefs.get)
-        #print("action dtype:", type(policy_trees[pmax].action))
+        print(f"Selected Policy Tree: {pmax}, Action: {policy_trees[pmax].action}")
         return policy_trees[pmax].action
 
     def _build_policy_trees(self, depth, agent):
@@ -99,9 +100,7 @@ class ValueIteration(Planner):
         states = agent.all_states
         observations = agent.all_observations  # we expect observations to be indexed
 
-        #print(f"Building policy trees at depth {depth}")
         if depth >= self._planning_horizon or self._discount_factor**depth < self._epsilon:  # 終了条件,  探索深さが予め指定した深さを超えたら終了
-            #print(f"Reached terminal depth {depth}")
             return [_PolicyTreeNode(a, depth, agent, self._discount_factor)
                     for a in actions]
         else:
@@ -113,10 +112,8 @@ class ValueIteration(Planner):
             for _ in range(len(observations)):
                 group = self._build_policy_trees(depth+1, agent)
                 groups.append(group)
-            #print(f"groups at depth {depth}:", groups)
             # (Sanity check) We expect all groups to have same size
             group_size = len(groups[0])
-            #print("group_size:", group_size)
             for g in groups:
                 assert group_size == len(g)
 
@@ -124,7 +121,6 @@ class ValueIteration(Planner):
             # will become one policy tree that will be returned, with an action to
             # take at the current depth level as the root.
             combinations = list(itertools.product(*([range(group_size)]*len(observations))) ) # 返り値はtuple
-            #print(f"combinations at depth {depth} : {list(combinations)}")
             policy_trees = []
             with tqdm(total=len(combinations), desc="Building policy trees", leave=True) as pbar_comb:
                 for comb in combinations:
@@ -136,14 +132,9 @@ class ValueIteration(Planner):
                     assert len(comb) == len(observations)  # sanity check
                     children = {}
                     for oi in range(len(comb)):
-                        #print("oi:", oi)
-                        #print("groups[oi]:", groups[oi])
-                        #print("comb[oi]:", comb[oi])
-                        #print("groups[oi][comb[oi]]:", groups[oi][comb[oi]])
                         sub_policy_tree = groups[oi][comb[oi]]
                         obs_key = observations[oi]
                         children[obs_key] = sub_policy_tree
-                    #print("children:", children)
                     
                     # Now that we have the children, we know that there could be
                     # |A| different root nodes, resulting in |A| different policy trees
