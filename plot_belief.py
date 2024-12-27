@@ -25,7 +25,7 @@ def updata(frame, states, values,state, action, obs):
     plt.xlim(0, 1)
     plt.xlabel("belief")
     plt.ylabel("state")
-    plt.title(f"frame: {frame+1}")
+    plt.title(f"Belief (reward:comfort),   frame: {frame+1}")
     plt.grid()
     
     # 各ステップ時の state, action, obs を右上に表示

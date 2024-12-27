@@ -279,8 +279,8 @@ class TransitionModel(pomdp_py.TransitionModel):
 class RewardModel(pomdp_py.RewardModel):
     def _reward_func(self, state, action):
         # 損失関数を定義
-        return state.comfort
-        #return -(F.mse_loss(state.attention, action.enhance_weight)).item()
+        #return state.comfort
+        return -(F.mse_loss(state.attention, action.enhance_weight)).item()
 
     def sample(self, state, action, next_state):
         # deterministic
@@ -463,10 +463,17 @@ def main():
     torch.set_default_device(device)
     torch.set_default_dtype(torch.float32)
     
-    # set save file name
-    file_name_state = "E:/sotsuron/venv_sotsuron/src/data/data_state.pkl"
-    file_name_belief = "E:/sotsuron/venv_sotsuron/src/data/data_belief.pkl"
-    file_name_action = "E:/sotsuron/venv_sotsuron/src/data/data_action.pkl"
+    """
+    # set save file name  reward : comfort 
+    file_name_state = "E:/sotsuron/venv_sotsuron/src/data/comfort/data_state.pkl"
+    file_name_belief = "E:/sotsuron/venv_sotsuron/src/data/comfort/data_belief.pkl"
+    file_name_action = "E:/sotsuron/venv_sotsuron/src/data/comfort/data_action.pkl"
+    """
+    
+    # set save file name  reward : mse
+    file_name_state = "E:/sotsuron/venv_sotsuron/src/data/mse/data_state.pkl"
+    file_name_belief = "E:/sotsuron/venv_sotsuron/src/data/mse/data_belief.pkl"
+    file_name_action = "E:/sotsuron/venv_sotsuron/src/data/mse/data_action.pkl"
     
     # 初期状態の設定
     init_true_state = [0,1,0,1,1]
