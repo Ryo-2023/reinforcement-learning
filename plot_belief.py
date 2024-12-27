@@ -36,9 +36,9 @@ def updata(frame, states, values,state, action, obs):
     plt.text(1, 0.90, action_text, transform=plt.gca().transAxes, verticalalignment='top')
     plt.text(1, 0.85, obs_text, transform=plt.gca().transAxes, verticalalignment='top')
     
-state = load_data("E:/sotsuron/venv_sotsuron/src/data/data_state.pkl")
-belief = load_data("E:/sotsuron/venv_sotsuron/src/data/data_belief.pkl")
-action = load_data("E:/sotsuron/venv_sotsuron/src/data/data_action.pkl")
+state = load_data("E:/sotsuron/venv_sotsuron/src/data/mse/data_state.pkl")
+belief = load_data("E:/sotsuron/venv_sotsuron/src/data/mse/data_belief.pkl")
+action = load_data("E:/sotsuron/venv_sotsuron/src/data/mse/data_action.pkl")
 obs = load_data("E:/sotsuron/venv_sotsuron/src/data/test_data.pkl")
 
 states, values, steps, nsteps = reshape_data(belief)
@@ -48,6 +48,6 @@ ani = FuncAnimation(fig, updata, fargs=(states, values,state,action,obs), frames
 
 # gif で保存
 writer = PillowWriter(fps=1)
-ani.save("E:/sotsuron/venv_sotsuron/src/data/plot_belief_comfort.gif", writer=writer)
+ani.save("E:/sotsuron/venv_sotsuron/src/data/mse/plot_belief_mse.gif", writer=writer)
 
 plt.show()
