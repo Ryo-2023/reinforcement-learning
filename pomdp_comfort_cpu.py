@@ -9,6 +9,7 @@ from pomdp_py.utils import TreeDebugger
 import pickle
 import torch.nn.functional as F
 import time
+import os
 
 """
 各クラスの詳細 : pomdp_py.framework.basics
@@ -189,7 +190,7 @@ def pdf_list(mean, sigma, weight_list):  # 確率密度関数の生成
     return normalized_probabilities
     
 class ObservationModel(pomdp_py.ObservationModel):
-    def __init__(self,step = 1,n_people=3, sigma=0.1):
+    def __init__(self,step = 1,n_people=3, sigma=0.3):
         self.sigma = sigma # 分散
         self.step = step
         self.n = n_people
@@ -220,7 +221,7 @@ class ObservationModel(pomdp_py.ObservationModel):
         return OBS
     
 class TransitionModel(pomdp_py.TransitionModel):
-    def __init__(self, step=1,n_people=3, sigma=0.1):
+    def __init__(self, step=1,n_people=3, sigma=0.3):
         self.sigma = sigma # 分散
         self.step = step
         self.n = n_people
@@ -230,10 +231,10 @@ class TransitionModel(pomdp_py.TransitionModel):
         self.comforts = torch.tensor([0,1])
         self.follows  = torch.tensor([0,1])
         self.others_list = torch.tensor([[0,0],[0,1],[1,0],[1,1]])
-        self.others_trans_prob_table = torch.tensor([[0.8,0.2,0,0],
+        self.others_trans_prob_table = torch.tensor([[0.7,0.2,0.05,0.05],
                                                     [0.15,0.7,0.05,0.1],
                                                     [0.05,0.05,0.7,0.2],
-                                                    [0.05,0,0.05,0.9]])
+                                                    [0.05,0,0.35,0.6]])
         
     def probability(self, next_state, state, action):
         """According to problem spec, the world resets once
@@ -252,6 +253,7 @@ class TransitionModel(pomdp_py.TransitionModel):
 
         # 総合的な遷移確率
         trans_prob = attention_trans_prob * others_trans_prob
+        #print(f"trans_prob at ({state} -> {next_state}): {trans_prob:.4f}")
         return trans_prob
             
     def sample(self, state, action):
@@ -279,8 +281,8 @@ class TransitionModel(pomdp_py.TransitionModel):
 class RewardModel(pomdp_py.RewardModel):
     def _reward_func(self, state, action):
         # 損失関数を定義
-        #return state.comfort
-        return -(F.mse_loss(state.attention, action.enhance_weight)).item()
+        return state.comfort-1.5*(F.mse_loss(state.attention, action.enhance_weight)).item()
+        #return (F.mse_loss(state.attention, action.enhance_weight)).item()
 
     def sample(self, state, action, next_state):
         # deterministic
@@ -430,12 +432,14 @@ def test_planner(model_problem, planner, obs_data = None, nsteps=3, debug_tree=T
         print(f"epoch_time:{epoch_time:.4f} s")
     
     # データの保存
+    os.makedirs(os.path.dirname(file_name_state), exist_ok=True)  # 指定した保存先のディレクトリがない場合、自動生成
     if file_name_state is not None:
         save_data(data_state,file_name_state)
     if file_name_belief is not None:
         save_data(data_belief,file_name_belief)
     if file_name_action is not None:
         save_data(data_action,file_name_action)
+    
 
 def make_model(init_state=[0,1,0,1,1], init_belief=None,step=1,num_people=3):
     """model_domain の作成に便利"""
@@ -463,17 +467,10 @@ def main():
     torch.set_default_device(device)
     torch.set_default_dtype(torch.float32)
     
-    """
-    # set save file name  reward : comfort 
-    file_name_state = "E:/sotsuron/venv_sotsuron/src/data/comfort/data_state.pkl"
-    file_name_belief = "E:/sotsuron/venv_sotsuron/src/data/comfort/data_belief.pkl"
-    file_name_action = "E:/sotsuron/venv_sotsuron/src/data/comfort/data_action.pkl"
-    """
-    
-    # set save file name  reward : mse
-    file_name_state = "E:/sotsuron/venv_sotsuron/src/data/mse/data_state.pkl"
-    file_name_belief = "E:/sotsuron/venv_sotsuron/src/data/mse/data_belief.pkl"
-    file_name_action = "E:/sotsuron/venv_sotsuron/src/data/mse/data_action.pkl"
+    # set save file name
+    file_name_state = "E:/sotsuron/venv_sotsuron/src/data/hybrid/data_state.pkl"
+    file_name_belief = "E:/sotsuron/venv_sotsuron/src/data/hybrid/data_belief.pkl"
+    file_name_action = "E:/sotsuron/venv_sotsuron/src/data/hybrid/data_action.pkl"
     
     # 初期状態の設定
     init_true_state = [0,1,0,1,1]
