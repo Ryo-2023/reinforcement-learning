@@ -1,11 +1,6 @@
 import torch
 import itertools
-
-# デバイスの設定
-torch.set_default_dtype(torch.float32)
-torch.set_default_tensor_type = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor
-device = "cuda" if torch.cuda.is_available() else "cpu"
-torch.set_default_device(device)
+from tqdm import tqdm
 
 class Model():
     def __init__(self, sigma, num_people):
@@ -68,7 +63,6 @@ class Model():
         self.belief = (torch.ones(self.num_states) / self.num_states).repeat(self.num_actions,self.num_observations,1)  # [a,o,s]
         
     # 報酬関数の定義
-    @staticmethod
     def reward(self,state):
         return state[self.n+1] # 報酬 : comfort
     
@@ -115,7 +109,7 @@ class Model():
         follow_0_index = (self.states[:, -1] == 0).nonzero(as_tuple=True)[0]
         follow_1_index = (self.states[:, -1] == 1).nonzero(as_tuple=True)[0]
         
-        print(follow_0_index)
+        #print(follow_0_index)
         # follow = 1, システムに従う場合
         for i in follow_1_index:
             for j in range(self.num_actions):
@@ -139,35 +133,48 @@ class PBVI():
         self.A_dim = model.num_actions
         self.O_dim = model.num_observations
         
-        self.alpha_vecs = torch.zeros(self.S_dim,self.N_dim)            # 初期のαベクトル  
-        self.belief_points = self.generate_belief_points(self.S_dim)    # 信念点のリスト  [s,n]
-        self.N_dim = self.belief_points.size(1)                         # 信念点の数
+        print("start Generating belief points")
+        self.belief_points = self.generate_belief_points()    # 信念点のリスト  [s,n]
+        self.N_dim = self.belief_points.size(1)               # 信念点の数
         
-    def generate_belief_points(self,num_states, step=0.2):
+        self.alpha_vecs = torch.zeros(self.S_dim,self.N_dim)  # 初期のαベクトル  
+        
+        # r^a(s)
+        self.r_a = torch.zeros(self.A_dim, self.S_dim)
+        for i in range(self.S_dim):
+            self.r_a[:,i] = self.model.reward(self.model.states[i])
+        
+    def generate_belief_points(self,step=0.5):
         """0.2刻みで信念点の組を生成"""
-        belief_points = []
-        values = [i * step for i in range(int(1 / step) + 1)]
-        belief_combinations = itertools.product(values, repeat=num_states)
-        for belief in belief_combinations:
-            if abs(sum(belief) - 1.0) < 1e-6:  # 合計が1になる組み合わせのみを選択
-                belief_points.append(torch.tensor(belief))
-        return torch.tensor(belief_points).T
+        values = [round(i * step,2) for i in range(int(1/step)+1)]  # {0,0.5,1}
+        #belief_points = torch.tensor([list(comb) for comb in itertools.product(values,repeat=num_states) if round(sum(comb),10)==1.0]).T
         
+        belief_points = []
+        belief_combinations = itertools.product(values, repeat=self.S_dim)
+        total_combinations = len(values)**self.S_dim
+        print("start generating belief points")
+        with tqdm(total=total_combinations, desc="Generating belief points") as p_bar:
+            for belief in belief_combinations:
+                if abs(sum(belief) - 1.0) < 1e-6:  # 合計が1になる組み合わせのみを選択
+                    belief_points.append(list(belief))
+                p_bar.update(1)
+        
+        if len(belief_points) == 0:
+            raise ValueError("No valid belief points generated. Check the step size and num_states.")
+        
+        belief_points_tensor = torch.tensor(belief_points, dtype=torch.float32).T
+        print("belief_points:", belief_points_tensor)
+        
+        return belief_points_tensor
+            
     def backup(self):
-        best_value = float('-inf')
-        best_alpha = None
         best_actions = []
         backup_alpha = torch.zeros(self.S_dim,self.N_dim)
-        values = torch.zeros(self.N_dim)
         
         # calc alpha_ao
-        alpha_ao = torch.stack([torch.einsum('sj,jao,j->aos',self.model.trans_prob, self.model.obs_prob, self.alpha_vecs[i]) for i in range(self.T)])  # alpha_ao=[a1(s1),a2(s2),...,aT(sT)], a_k(s):[a,o,s],  alpha_ao:[T,a,o,s], j:s'
+        alpha_ao = torch.stack([torch.einsum('sj,jao,j->aos',self.model.trans_prob, self.model.obs_prob, self.alpha_vecs[:,i]) for i in range(self.T_dim)])  # alpha_ao=[a1(s1),a2(s2),...,aT(sT)], a_k(s):[a,o,s],  alpha_ao:[T,a,o,s], j:s'
         # calc alpha_ab
-        # r^a(s)
-        r_a = torch.zeros(self.A_dim, self.S_dim)
-        for i in range(self.S_dim):
-            r_a[:,i] = self.model.reward(self.model.states[i])
-        
+
         """
         # N_dim に対してループ
         for i in range(self.N_dim):
@@ -190,69 +197,105 @@ class PBVI():
         """
             
         # N_dim に対しても並列化
-        b_dot_alpha_ao = torch.einsum('sn,Taos->nTao',self.belief_points,alpha_ao)  # b[:,i]・α^{a,o}=[a1,b1],a_k(s):[a,o,s],  b・α^{a,o}:[T,a,o]'
-        argmax_alpha_index = torch.argmax(b_dot_alpha_ao, dim=1)  # argmax_a:[n,a,o]
         
-        argmax_alpha = torch.gather(alpha_ao.unsqueeze(0).expand(self.N_dim,-1,-1,-1,-1),
-                                dim=0,
-                                index=argmax_alpha_index.unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).expand(-1,-1,self.A_dim,alpha_ao.size(3),alpha_ao.size(4))).squeeze(1)  # argmax_a:[N,a,o,s]
-        sum_alpha_ao = torch.einsum('naos->nas',argmax_alpha)        # sum_alpha_ao:[a,s]
-        alpha_ab = r_a.unsqueeze(0).expand(self.N_dim,-1,-1) + self.gamma * sum_alpha_ao  # alpha_ab:[a,s]
+        # belief_points: [S, N]
+        # alpha_ao: [T, A, O, S]
+        # b_dot_alpha_ao: [N, T, A, O]
+        b_dot_alpha_ao = torch.einsum('sn,Taos->nTao',self.belief_points,alpha_ao)  # b[:,i]・α^{a,o}=[a1,b1],a_k(s):[a,o,s],  b・α^{a,o}:[T,a,o]'
+        argmax_alpha_index = torch.argmax(b_dot_alpha_ao, dim=1)  # argmax_a:[n,a,o]　各nでT次元が一番大きい要素を取得
+        
+        """
+        argmax_alpha = torch.gather(alpha_ao.unsqueeze(0).expand(self.N_dim,-1,-1,-1,-1),  # -> [n,T,a,o,s]
+                                dim=1,  # T_dim                             
+                                index = argmax_alpha_index
+                                        .unsqueeze(-1).unsqueeze(-1).unsqueeze(-1).
+                                        expand(-1,-1,-1,1,alpha_ao.size(2),alpha_ao.size(3))
+                                ).squeeze(1)   # argmax_alpha:[n,a,o,s]   
+        """
+        
+        # gather用に整形
+        expanded_alpha = alpha_ao.unsqueeze(0).expand(self.N_dim,-1,-1,-1,-1)  # -> [n,T,a,o,s]
 
-        b_dot_alpha_ab = torch.einsum('ns,as->na',self.belief_points,alpha_ab)
+        idx = (argmax_alpha_index
+            .unsqueeze(1)       # -> [N_dim, 1, A_dim, O_dim]
+            .unsqueeze(-1))     # -> [N_dim, 1, A_dim, O_dim, 1]
+        idx = idx.expand(-1, expanded_alpha.size(1), -1, -1, expanded_alpha.size(4)) \
+                .permute(0,1,2,3,4)  # [N_dim, T_dim, A_dim, O_dim, S_dim]
+
+        argmax_alpha = torch.gather(expanded_alpha, dim=1, index=idx)           # [N_dim, T_dim, A_dim, O_dim, S_dim]
+        
+        """
+        # T_dim に沿って値が同じかどうか確認
+        same_values = torch.allclose(argmax_alpha[:,0],argmax_alpha[:,1])
+        print("same_values:",same_values)
+        """
+        
+        argmax_alpha = argmax_alpha.index_select(1,torch.tensor([0]))
+        argmax_alpha = argmax_alpha.squeeze(1)   # [N_dim, A_dim, O_dim, S_dim]
+        #print("argmax_alpha.shape:",argmax_alpha.shape)
+        
+        sum_alpha_ao = torch.einsum('naos->nas',argmax_alpha)        # sum_alpha_ao:[n,a,s]
+
+        alpha_ab = self.r_a.unsqueeze(0).expand(self.N_dim,-1,-1) + self.gamma * sum_alpha_ao  # [n,a,s]
+
+        b_dot_alpha_ab = torch.einsum('sn,nas->na',self.belief_points,alpha_ab)
         best_action_index = torch.argmax(b_dot_alpha_ab,dim=1)  # best_action_index:[n]
         
         # calc new alpha
-        new_alpha = alpha_ab[torch.arange(self.N_dim),best_action_index]
+        new_alpha = alpha_ab[torch.arange(self.N_dim),best_action_index].T
         backup_alpha = new_alpha
 
         # add best actions
-        best_actions = [self.model_actions[i] for i in best_action_index.tolist()]
+        best_actions = [self.model.actions[i] for i in best_action_index.tolist()]
         
         return backup_alpha, best_actions
-
-
-
         
     def run_backup(self,max_iter=100,epsilon=1e-6):
-        for iteration in range(max_iter):
-            max_change = 0  # αベクトルの変化量の最大値
-            new_backup_alpha = torch.zeros_like(self.alpha_vecs)
-            
-            for i in range(self.N_dim):
-                # b・α^{a,o}
-                b_dot_alpha_ao = torch.einsum('s,Taos->Tao', self.belief_points[:, i], self.alpha_ao)  # b[:,i]・α^{a,o}=[a1,b1],a_k(s):[a,o,s,n],  b・α^{a,o}:[T,a,o]'
-                argmax_a_index = torch.argmax(b_dot_alpha_ao, dim=0)  # argmax_a:[a,o]
+        with tqdm(total = max_iter, desc="PBVI") as p_bar:
+            for iteration in tqdm(range(max_iter)):
+                max_change = 0  # αベクトルの変化量の最大値
+                previous_alpha = self.alpha_vecs.clone()
+                #print("previous_alpha:",previous_alpha)
+                
+                # backup
+                backup_alpha, best_actions = self.backup()
+                
+                #print("backup_alpha:",backup_alpha)
+                
+                # max_changeの計算
+                max_change = torch.norm(backup_alpha - previous_alpha, p=float('inf'))
+                print("max_change:",max_change)
+                
+                # update backup_alpha
+                self.alpha_vecs = backup_alpha
 
-                index = argmax_a_index.unsqueeze(-1).unsqueeze(-1).expand(-1, -1, self.alpha_ao.size(2), -1)  # torch.gather のために整形
-                argmax_a = torch.gather(self.alpha_ao, 0, index).squeeze(-1)  # argmax_a:[a,o,s]
-                sum_alpha_ao = torch.einsum('aos->as', argmax_a)  # sum_alpha_ao:[a,s]
-                alpha_ab = self.r_a + self.gamma * sum_alpha_ao  # alpha_ab:[a,s]
-
-                # calc new alpha
-                b_dot_alpha_ab = torch.einsum('s,as->a', self.belief_points[:, i], alpha_ab)  # b・alpha_ab:[a]
-                index = torch.argmax(b_dot_alpha_ab)
-                new_alpha = alpha_ab[index]
-
-                new_backup_alpha[i] = new_alpha
-
-                # 変化量の最大値を更新
-                change = torch.norm(new_alpha - self.backup_alpha[i])
-                if change > max_change:
-                    max_change = change
-
-            self.backup_alpha = new_backup_alpha
-
-            # 収束判定
-            if max_change < epsilon:
-                break
-
-            
+                # 収束判定
+                if max_change < epsilon:
+                    break
+                
+                p_bar.update(1)
         
             
-class POMDP(Model):
-    def __init__(self, sigma, num_people):
-        super().__init__(sigma, num_people)
+def main():
+    # デバイスの設定
+    torch.set_default_dtype(torch.float32)
+    torch.set_default_tensor_type = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    torch.set_default_device(device)
+    
+    sigma = 0.3
+    num_people = 3
+    horizon = 10
+    
+    model = Model(sigma,num_people)
+    print("Finish model generation")
+    
+    pbvi = PBVI(model,horizon)
+    
+    pbvi.run_backup()
+    
+if __name__ == "__main__":
+    main()
         
 
         
