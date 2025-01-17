@@ -1,8 +1,10 @@
 import torch
 import itertools
 from tqdm import tqdm
+import time
+from util_funcs import Util_Funcs
 
-class Model():
+class Agent():
     def __init__(self, sigma, num_people):
         self.sigma = sigma
         self.n = num_people
@@ -45,7 +47,7 @@ class Model():
         # 状態遷移確率の初期化
         self.trans_prob_attention = torch.eye(self.num_attentions) # dim1 : current attention (縦軸), dim2 : next attention (横軸)
         for i  in range(self.num_attentions):
-            self.trans_prob_attention[i] = self.pdf_list(self.attentions[i],self.sigma,self.attentions)  # 状態遷移確率は正規分布でモデル化
+            self.trans_prob_attention[i] = Util_Funcs.pdf_list(self.attentions[i],self.sigma,self.attentions)  # 状態遷移確率は正規分布でモデル化
         
         # dim1 : current[comfort, follow] (縦軸), dim2 : next[comfort, follow] (横軸) 4*4の行列 [00,01,10,11]
         self.trans_prob_others = torch.tensor([[0.7, 0.1, 0.1, 0.1],  
@@ -61,10 +63,6 @@ class Model():
         
         # 信念状態の初期化
         self.belief = (torch.ones(self.num_states) / self.num_states).repeat(self.num_actions,self.num_observations,1)  # [a,o,s]
-        
-    # 報酬関数の定義
-    def reward(self,state):
-        return state[self.n+1] # 報酬 : comfort
     
     def generate_weight_list(self,n_people,step):
         values = [round(i * 1/step, 2) for i in range(step+1)]  # [0.0, 0.5, 1.0] のリスト
@@ -79,27 +77,22 @@ class Model():
         
         return state_space
     
-    def pdf_list(self, mean, sigma, weight_list):  # 確率密度関数の生成
-        probabilities = []
-        for weights in weight_list:
-            diff = weights - mean
-            prob = (torch.exp(-0.5 * ((diff / sigma) ** 2))/(sigma*torch.sqrt(torch.tensor(2*torch.pi)))).prod().item()
-            probabilities.append(prob)
-        normalized_probabilities = torch.tensor([prob / sum(probabilities) for prob in probabilities])
-        return normalized_probabilities
-    
-    @staticmethod
     def update_belief(self,belief):
         # 入力には[a_{t-1},o_{t-1}]のときの信念b(s):[s]が入る
         # 正規化項 reg
-        sum_s1 = torch.einsum("ij,i->j",self.trans_prob,belief).repeat(self.num_actions,1)     # [s,s'] * [s] -> [s']  -> [a,s'] (整形)
-        sum_s2 = torch.einsum("ij,jkl->ikl",self.trans_prob,self.obs_prob)                     # [s,s''] * [s'',a,o] -> [s,a,o]
-        reg = torch.einsum("j,jkl->kl",belief,sum_s2)                                          # [s] * [s,a,o] -> [a,o]
+        sum_s1 = torch.einsum("sj,aos->aoj",self.trans_prob,belief)                         # [s,s'] * [a,o,s] -> [a,o,s'] 
+        sum_s2 = torch.einsum("sj,jao->sao",self.trans_prob,self.obs_prob)                  # [s,s'] * [s',a,o] -> [s,a,o]
+        
+        # 正規化項
+        reg = torch.einsum("aos,sao->ao",belief,sum_s2)                                     # [a,o,s] * [s,a,o] -> [a,o]    
         
         # 信念の更新
-        belief = torch.einsum("sao,as->aos",self.trans_prob,sum_s1) / reg                      # [s,a,o] / [a,o] -> [a,o,s]       
+        belief_not_reg = torch.einsum("jao,aoj->aoj",self.obs_prob,sum_s1)                  # [s,a,o] * [a,o,s] -> [a,o,s]  
+        update_belief = belief_not_reg / reg.unsqueeze(-1).expand(-1,-1,self.num_states)           # [a,o,s] / ([a,o] -> [a,o,s])
+ 
+        self.belief = update_belief
         
-        return belief
+        return update_belief
 
     def init_obs_prob(self):
         tensor_shape = (self.num_states, self.num_actions, self.num_observations)
@@ -113,40 +106,97 @@ class Model():
         # follow = 1, システムに従う場合
         for i in follow_1_index:
             for j in range(self.num_actions):
-                prob = 0.1 * self.pdf_list(self.states[i, :self.n], self.sigma, self.observations) + 0.9 * self.pdf_list(self.actions[j], self.sigma, self.observations)
+                prob = 0.1 * Util_Funcs.pdf_list(self.states[i, :self.n], self.sigma, self.observations) + 0.9 * Util_Funcs.pdf_list(self.actions[j], self.sigma, self.observations)
                 obs_prob[i,j,:] = prob
         # follow = 0, システムに従わない場合
         for i in follow_0_index:
             for j in range(self.num_actions):
-                prob = 0.9 * self.pdf_list(self.states[i, :self.n], self.sigma, self.observations) + 0.1 * self.pdf_list(self.actions[j], self.sigma, self.observations)
+                prob = 0.9 * Util_Funcs.pdf_list(self.states[i, :self.n], self.sigma, self.observations) + 0.1 * Util_Funcs.pdf_list(self.actions[j], self.sigma, self.observations)
                 obs_prob[i,j,:] = prob
 
         return obs_prob
     
+class Environment:
+    def __init__(self,agent,current_state):
+        self.sigma = agent.sigma
+        self.agent = agent
+        self.current_state = self.init_state()
+    
+    def init_state(self):
+        # 環境の初期状態
+        init_state = self.agent.states[0]   # 初期状態として最初の状態を選択
+        return init_state
+    
+    def sample_obs(self,next_state,action):
+        if next_state[4] == 1:
+            normalized_prob = Util_Funcs.pdf_list(action, self.sigma, self.agent.observations)
+            sight_sample_follow = self.agent.observations[torch.multinomial(torch.tensor(normalized_prob), 1).item()]
+            return sight_sample_follow
+        elif next_state[4] == 0:
+            normalized_prob = Util_Funcs.pdf_list(next_state[:3], self.sigma, self.agent.observations)
+            sight_sample_not_follow = self.agent.observations[torch.multinomial(torch.tensor(normalized_prob), 1).item()]    # torch.multinomial:与えられた確率分布に基づきサンプリング
+            return sight_sample_not_follow
+    
+    def sample_state(self,state, action):
+        # attention
+        normalized_prob = Util_Funcs.pdf_list(state[:3], self.sigma, self.agent.attentions)
+        next_attention = self.agent.attentions[torch.multinomial(normalized_prob, 1).item()]
+
+        # current index of comfort and follow
+        current_index = int(state[3].item() * 2 + state[4].item())
+        sample = torch.multinomial(self.agent.trans_prob_others[current_index], 1).item()
+        
+        # indexからcomfortとfollowを取得
+        next_comfort = torch.tensor([sample // 2])
+        next_follow = torch.tensor([sample % 2])
+        
+        # サンプリング結果
+        next_state = torch.cat((next_attention, next_comfort, next_follow))
+
+        return next_state
+    
+    # 報酬関数の定義
+    def reward(self,state):
+        return state[3] # 報酬 : comfort
+    
+    def step(self,action):
+        next_state = self.sample_state(self.current_state, action)
+        
+        reward = self.reward(next_state)
+        
+        obs = self.sample_obs(next_state,action)
+        
+        # 現状態の更新
+        self.current_state = next_state
+        
+        return next_state, reward, obs
+    
 class PBVI():
-    def __init__(self, model, horizon, discount_factor=0.9):
-        self.model = model
+    def __init__(self, Agent, env, horizon, discount_factor=0.9):
+        self.Agent = Agent
+        self.env = env
         self.gamma = discount_factor
         
         self.T_dim = horizon
-        self.S_dim = model.num_states
-        self.A_dim = model.num_actions
-        self.O_dim = model.num_observations
+        self.S_dim = Agent.num_states
+        self.A_dim = Agent.num_actions
+        self.O_dim = Agent.num_observations
         
-        print("start Generating belief points")
         self.belief_points = self.generate_belief_points()    # 信念点のリスト  [s,n]
         self.N_dim = self.belief_points.size(1)               # 信念点の数
         
         self.alpha_vecs = torch.zeros(self.S_dim,self.N_dim)  # 初期のαベクトル  
         
+        self.best_actions = []  # 最適な行動のリスト
+        
         # r^a(s)
         self.r_a = torch.zeros(self.A_dim, self.S_dim)
         for i in range(self.S_dim):
-            self.r_a[:,i] = self.model.reward(self.model.states[i])
+            self.r_a[:,i] = self.env.reward(self.Agent.states[i])
         
-    def generate_belief_points(self,step=0.5):
+    def generate_belief_points(self,step=0.2):
         """0.2刻みで信念点の組を生成"""
-        values = [round(i * step,2) for i in range(int(1/step)+1)]  # {0,0.5,1}
+        values = [round(i * step,2) for i in range(int(1/step)+1)]  
         #belief_points = torch.tensor([list(comb) for comb in itertools.product(values,repeat=num_states) if round(sum(comb),10)==1.0]).T
         
         belief_points = []
@@ -172,7 +222,7 @@ class PBVI():
         backup_alpha = torch.zeros(self.S_dim,self.N_dim)
         
         # calc alpha_ao
-        alpha_ao = torch.stack([torch.einsum('sj,jao,j->aos',self.model.trans_prob, self.model.obs_prob, self.alpha_vecs[:,i]) for i in range(self.T_dim)])  # alpha_ao=[a1(s1),a2(s2),...,aT(sT)], a_k(s):[a,o,s],  alpha_ao:[T,a,o,s], j:s'
+        alpha_ao = torch.stack([torch.einsum('sj,jao,j->aos',self.Agent.trans_prob, self.Agent.obs_prob, self.alpha_vecs[:,i]) for i in range(self.T_dim)])  # alpha_ao=[a1(s1),a2(s2),...,aT(sT)], a_k(s):[a,o,s],  alpha_ao:[T,a,o,s], j:s'
         # calc alpha_ab
 
         """
@@ -192,7 +242,7 @@ class PBVI():
             index = torch.argmax(b_dot_alpha_ab)
             new_alpha = alpha_ab[index]
             
-            best_actions.append(self.model.actions[index])
+            best_actions.append(self.Agent.actions[index])
             backup_alpha[i] = new_alpha
         """
             
@@ -246,11 +296,11 @@ class PBVI():
         backup_alpha = new_alpha
 
         # add best actions
-        best_actions = [self.model.actions[i] for i in best_action_index.tolist()]
+        best_actions = [self.Agent.actions[i] for i in best_action_index.tolist()]
         
         return backup_alpha, best_actions
         
-    def run_backup(self,max_iter=100,epsilon=1e-6):
+    def run_backup(self,max_iter=10000,epsilon=1e-12):
         with tqdm(total = max_iter, desc="PBVI") as p_bar:
             for iteration in tqdm(range(max_iter)):
                 max_change = 0  # αベクトルの変化量の最大値
@@ -264,17 +314,26 @@ class PBVI():
                 
                 # max_changeの計算
                 max_change = torch.norm(backup_alpha - previous_alpha, p=float('inf'))
-                print("max_change:",max_change)
+                #print("max_change:",max_change)
                 
-                # update backup_alpha
+                # update backup_alpha, best_actions
                 self.alpha_vecs = backup_alpha
+                self.best_actions = best_actions
 
                 # 収束判定
                 if max_change < epsilon:
                     break
                 
                 p_bar.update(1)
-        
+                
+    def get_policy(self):
+        return self.best_actions
+    
+    def get_alpha_vecs(self):
+        return self.alpha_vecs
+    
+    def get_belief_points(self):
+        return self.belief_points
             
 def main():
     # デバイスの設定
@@ -287,12 +346,50 @@ def main():
     num_people = 3
     horizon = 10
     
-    model = Model(sigma,num_people)
-    print("Finish model generation")
+    # agentの生成
+    agent = Agent(sigma,num_people)
+    print("Finish Agent generation")
     
-    pbvi = PBVI(model,horizon)
+    # environmentの生成
+    env = Environment(agent,agent.states[0])
+    print("Finish Environment generation")
     
+    # PBVIの生成
+    pbvi = PBVI(agent,env,horizon)
     pbvi.run_backup()
+    
+    nsteps = 20   # エージェントと環境のやりとり回数
+    
+    # データリストの初期化
+    state_data  = []
+    belief_data = []
+    action_data = []
+    obs_data    = []
+    
+    for i in range(nsteps):
+        start_time = time.time()
+        
+        # PBVIから行動を取得
+        best_action = pbvi.get_policy()
+        # 適当な行動を洗濯
+        action = agent.actions[0] if len(best_action) == 0 else best_action[i]
+        
+        # env step : 次状態, 報酬, 観測の取得
+        next_state, reward, obs = env.step(action)
+        
+        # 信念の更新
+        belief = agent.update_belief(agent.belief)
+        
+        # ログの記録
+        state_data.append(next_state.clone().tolist())
+        belief_data.append(belief.clone().tolist())
+        action_data.append(action.clone().tolist())
+        obs_data.append(obs.clone().tolist())
+        
+        elapsed = time.time() - start_time
+        
+        print(f"step:{i+1}, action:{action.tolist()}, next_state:{next_state.tolist()}, reward:{reward}, obs:{obs.tolist()}, elapsed_time:{elapsed}")
+        
     
 if __name__ == "__main__":
     main()
