@@ -1,6 +1,7 @@
 import pomdp_py
 from pomdp_py.utils import TreeDebugger
 from value_iteration import ValueIteration
+from PBVI import PBVI
 import random
 import torch
 import itertools
@@ -468,9 +469,9 @@ def main():
     torch.set_default_dtype(torch.float32)
     
     # set save file name
-    file_name_state = "E:/sotsuron/venv_sotsuron/src/data/hybrid/data_state.pkl"
-    file_name_belief = "E:/sotsuron/venv_sotsuron/src/data/hybrid/data_belief.pkl"
-    file_name_action = "E:/sotsuron/venv_sotsuron/src/data/hybrid/data_action.pkl"
+    file_name_state = "E:/sotsuron/venv_sotsuron/src/VI_data/hybrid/data_state.pkl"
+    file_name_belief = "E:/sotsuron/venv_sotsuron/src/VI_data/hybrid/data_belief.pkl"
+    file_name_action = "E:/sotsuron/venv_sotsuron/src/VI_data/hybrid/data_action.pkl"
     
     # 初期状態の設定
     init_true_state = [0,1,0,1,1]
@@ -494,7 +495,7 @@ def main():
     init_belief = pomdp_py.Histogram(belief_dict)
     
     # 観測データ
-    file_path = "E:/sotsuron/venv_sotsuron/src/data/test_data.pkl"
+    file_path = "E:/sotsuron/venv_sotsuron/src/test_data/test_data.pkl"
     with open(file_path, "rb") as f:
         data = pickle.load(f)
     obs_data = [Model_Observation(d) for d in data]
@@ -507,49 +508,16 @@ def main():
     nsteps = len(obs_data) if obs_data is not None else 10
     
     # 三つのプランナーを比較
-    print("** Testing value iteration **")  # 価値反復法
+    # 価値反復法
+    
+    print("** Testing value iteration **")
     vi = ValueIteration(horizon=2, discount_factor=0.9)  # horizon:探索深度, horizon=3 にすると計算量が発散するためやめましょう
     all_start_time = time.time()
     print("start test_planner")
     test_planner(model, vi, obs_data, nsteps,None,file_name_state,file_name_belief,file_name_action)  # nsteps:学習回数
     all_end_time = time.time()
     print(f"all_time:{all_end_time - all_start_time:.4f} s")
-    """
-    print("\n** Testing POUCT **")
     
-    pouct = pomdp_py.POUCT(
-        max_depth=3,
-        discount_factor=0.95,
-        num_sims=4096,
-        exploration_const=50,
-        rollout_policy=tiger.agent.policy_model,
-        show_progress=True,
-    )
-    
-    test_planner(tiger, pouct, nsteps=10)   # nsteps:学習回数
-    TreeDebugger(tiger.agent.tree).pp
-
-    # Reset agent belief
-    tiger.agent.set_belief(init_belief, prior=True)
-    tiger.agent.tree = None
-
-    print("** Testing POMCP **")
-    tiger.agent.set_belief(
-        pomdp_py.Particles.from_histogram(init_belief, num_particles=100), prior=True
-    )
-    pomcp = pomdp_py.POMCP(
-        max_depth=3,
-        discount_factor=0.95,
-        num_sims=1000,
-        exploration_const=50,
-        rollout_policy=tiger.agent.policy_model,
-        show_progress=True,
-        pbar_update_interval=500,
-    )
-    test_planner(tiger, pomcp, nsteps=10)
-    TreeDebugger(tiger.agent.tree).pp
-    """
-
 
 if __name__ == "__main__":
     main()

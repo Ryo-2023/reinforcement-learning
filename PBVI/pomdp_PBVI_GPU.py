@@ -2,7 +2,8 @@ import torch
 import itertools
 from tqdm import tqdm
 import time
-from util_funcs import Util_Funcs
+import os
+from Util_Funcs import util_funcs
 
 class Agent():
     def __init__(self, sigma, num_people):
@@ -10,7 +11,7 @@ class Agent():
         self.n = num_people
         
         # 状態、行動、観測空間の生成
-        self.attentions = self.generate_weight_list(self.n, 1)
+        self.attentions = util_funcs.generate_weight_list(self.n, 1)
         self.comforts = torch.tensor([0, 1])
         self.follows = torch.tensor([0, 1])
         
@@ -33,8 +34,8 @@ class Agent():
                         [1., 0., 0., 1., 1.]]) shape:(12, 5)
         """
         self.states = self.generate_state_space()
-        self.actions = self.generate_weight_list(self.n,2)
-        self.observations = self.generate_weight_list(self.n,1)
+        self.actions = util_funcs.generate_weight_list(self.n,2)
+        self.observations = util_funcs.generate_weight_list(self.n,1)
         
         self.num_attentions = self.attentions.shape[0]
         self.num_comforts = self.comforts.shape[0]
@@ -47,7 +48,7 @@ class Agent():
         # 状態遷移確率の初期化
         self.trans_prob_attention = torch.eye(self.num_attentions) # dim1 : current attention (縦軸), dim2 : next attention (横軸)
         for i  in range(self.num_attentions):
-            self.trans_prob_attention[i] = Util_Funcs.pdf_list(self.attentions[i],self.sigma,self.attentions)  # 状態遷移確率は正規分布でモデル化
+            self.trans_prob_attention[i] = util_funcs.pdf_list(self.attentions[i],self.sigma,self.attentions)  # 状態遷移確率は正規分布でモデル化
         
         # dim1 : current[comfort, follow] (縦軸), dim2 : next[comfort, follow] (横軸) 4*4の行列 [00,01,10,11]
         self.trans_prob_others = torch.tensor([[0.7, 0.1, 0.1, 0.1],  
@@ -63,10 +64,6 @@ class Agent():
         
         # 信念状態の初期化
         self.belief = (torch.ones(self.num_states) / self.num_states).repeat(self.num_actions,self.num_observations,1)  # [a,o,s]
-    
-    def generate_weight_list(self,n_people,step):
-        values = [round(i * 1/step, 2) for i in range(step+1)]  # [0.0, 0.5, 1.0] のリスト
-        return torch.tensor([list(comb) for comb in itertools.product(values, repeat=n_people) if round(sum(comb),10)==1.0])
     
     def generate_state_space(self):
         # すべての組み合わせを生成
@@ -88,8 +85,8 @@ class Agent():
         
         # 信念の更新
         belief_not_reg = torch.einsum("jao,aoj->aoj",self.obs_prob,sum_s1)                  # [s,a,o] * [a,o,s] -> [a,o,s]  
-        update_belief = belief_not_reg / reg.unsqueeze(-1).expand(-1,-1,self.num_states)           # [a,o,s] / ([a,o] -> [a,o,s])
- 
+        update_belief = belief_not_reg / reg.unsqueeze(-1).expand(-1,-1,self.num_states)    # [a,o,s] / ([a,o] -> [a,o,s])
+        
         self.belief = update_belief
         
         return update_belief
@@ -106,12 +103,12 @@ class Agent():
         # follow = 1, システムに従う場合
         for i in follow_1_index:
             for j in range(self.num_actions):
-                prob = 0.1 * Util_Funcs.pdf_list(self.states[i, :self.n], self.sigma, self.observations) + 0.9 * Util_Funcs.pdf_list(self.actions[j], self.sigma, self.observations)
+                prob = 0.1 * util_funcs.pdf_list(self.states[i, :self.n], self.sigma, self.observations) + 0.9 * util_funcs.pdf_list(self.actions[j], self.sigma, self.observations)
                 obs_prob[i,j,:] = prob
         # follow = 0, システムに従わない場合
         for i in follow_0_index:
             for j in range(self.num_actions):
-                prob = 0.9 * Util_Funcs.pdf_list(self.states[i, :self.n], self.sigma, self.observations) + 0.1 * Util_Funcs.pdf_list(self.actions[j], self.sigma, self.observations)
+                prob = 0.9 * util_funcs.pdf_list(self.states[i, :self.n], self.sigma, self.observations) + 0.1 * util_funcs.pdf_list(self.actions[j], self.sigma, self.observations)
                 obs_prob[i,j,:] = prob
 
         return obs_prob
@@ -129,17 +126,17 @@ class Environment:
     
     def sample_obs(self,next_state,action):
         if next_state[4] == 1:
-            normalized_prob = Util_Funcs.pdf_list(action, self.sigma, self.agent.observations)
+            normalized_prob = util_funcs.pdf_list(action, self.sigma, self.agent.observations)
             sight_sample_follow = self.agent.observations[torch.multinomial(torch.tensor(normalized_prob), 1).item()]
             return sight_sample_follow
         elif next_state[4] == 0:
-            normalized_prob = Util_Funcs.pdf_list(next_state[:3], self.sigma, self.agent.observations)
+            normalized_prob = util_funcs.pdf_list(next_state[:3], self.sigma, self.agent.observations)
             sight_sample_not_follow = self.agent.observations[torch.multinomial(torch.tensor(normalized_prob), 1).item()]    # torch.multinomial:与えられた確率分布に基づきサンプリング
             return sight_sample_not_follow
     
     def sample_state(self,state, action):
         # attention
-        normalized_prob = Util_Funcs.pdf_list(state[:3], self.sigma, self.agent.attentions)
+        normalized_prob = util_funcs.pdf_list(state[:3], self.sigma, self.agent.attentions)
         next_attention = self.agent.attentions[torch.multinomial(normalized_prob, 1).item()]
 
         # current index of comfort and follow
@@ -172,7 +169,7 @@ class Environment:
         return next_state, reward, obs
     
 class PBVI():
-    def __init__(self, Agent, env, horizon, discount_factor=0.9):
+    def __init__(self, Agent, env, horizon, discount_factor=0.95):
         self.Agent = Agent
         self.env = env
         self.gamma = discount_factor
@@ -194,7 +191,7 @@ class PBVI():
         for i in range(self.S_dim):
             self.r_a[:,i] = self.env.reward(self.Agent.states[i])
         
-    def generate_belief_points(self,step=0.2):
+    def generate_belief_points(self,step=1/4):
         """0.2刻みで信念点の組を生成"""
         values = [round(i * step,2) for i in range(int(1/step)+1)]  
         #belief_points = torch.tensor([list(comb) for comb in itertools.product(values,repeat=num_states) if round(sum(comb),10)==1.0]).T
@@ -212,7 +209,7 @@ class PBVI():
         if len(belief_points) == 0:
             raise ValueError("No valid belief points generated. Check the step size and num_states.")
         
-        belief_points_tensor = torch.tensor(belief_points, dtype=torch.float32).T
+        belief_points_tensor = torch.tensor(belief_points).T.clone().detach()
         print("belief_points:", belief_points_tensor)
         
         return belief_points_tensor
@@ -300,7 +297,7 @@ class PBVI():
         
         return backup_alpha, best_actions
         
-    def run_backup(self,max_iter=10000,epsilon=1e-12):
+    def run_backup(self,max_iter=1000,epsilon=1e-12):
         with tqdm(total = max_iter, desc="PBVI") as p_bar:
             for iteration in tqdm(range(max_iter)):
                 max_change = 0  # αベクトルの変化量の最大値
@@ -335,6 +332,11 @@ class PBVI():
     def get_belief_points(self):
         return self.belief_points
             
+def save_belief(belief_data,save_list):
+    belief_s = torch.einsum("aos->s",belief_data)
+    belief_s /= belief_s.sum()
+    save_list.append(belief_s.tolist())
+    
 def main():
     # デバイスの設定
     torch.set_default_dtype(torch.float32)
@@ -342,7 +344,15 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     torch.set_default_device(device)
     
-    sigma = 0.3
+    # 保存先のパスの指定
+    save_dir = "E:/sotsuron/venv_sotsuron/src/PBVI/PBVI_data/logs"
+    
+    filepath_state = os.path.join(save_dir,"data_state.pkl")
+    filepath_belief = os.path.join(save_dir,"data_belief.pkl")
+    filepath_action = os.path.join(save_dir,"data_action.pkl")
+    filepath_obs = os.path.join(save_dir,"data_obs.pkl")
+    
+    sigma = 1
     num_people = 3
     horizon = 10
     
@@ -358,7 +368,7 @@ def main():
     pbvi = PBVI(agent,env,horizon)
     pbvi.run_backup()
     
-    nsteps = 20   # エージェントと環境のやりとり回数
+    nsteps = 50   # エージェントと環境のやりとり回数
     
     # データリストの初期化
     state_data  = []
@@ -366,30 +376,44 @@ def main():
     action_data = []
     obs_data    = []
     
-    for i in range(nsteps):
-        start_time = time.time()
-        
-        # PBVIから行動を取得
-        best_action = pbvi.get_policy()
-        # 適当な行動を洗濯
-        action = agent.actions[0] if len(best_action) == 0 else best_action[i]
-        
-        # env step : 次状態, 報酬, 観測の取得
-        next_state, reward, obs = env.step(action)
-        
-        # 信念の更新
-        belief = agent.update_belief(agent.belief)
-        
-        # ログの記録
-        state_data.append(next_state.clone().tolist())
-        belief_data.append(belief.clone().tolist())
-        action_data.append(action.clone().tolist())
-        obs_data.append(obs.clone().tolist())
-        
-        elapsed = time.time() - start_time
-        
-        print(f"step:{i+1}, action:{action.tolist()}, next_state:{next_state.tolist()}, reward:{reward}, obs:{obs.tolist()}, elapsed_time:{elapsed}")
-        
+    with tqdm(total=nsteps, desc="Simulation steps") as p_bar:
+        for i in range(nsteps):
+            start_time = time.time()
+            
+            # PBVIから行動を取得
+            best_action = pbvi.get_policy()
+            # 適当な行動を選択
+            action = agent.actions[0] if len(best_action) == 0 else best_action[i]
+            
+            # env step : 次状態, 報酬, 観測の取得
+            next_state, reward, obs = env.step(action)
+            
+            # 信念の更新
+            belief = agent.update_belief(agent.belief)
+            
+            # ログの記録
+            state_data.append(next_state.clone().tolist())
+            save_belief(belief,belief_data)
+            action_data.append(action.clone().tolist())
+            obs_data.append(obs.clone().tolist())
+            
+            elapsed = time.time() - start_time
+            
+            print(f"step:{i+1}, action:{action.tolist()}, next_state:{next_state.tolist()}, reward:{reward}, obs:{obs.tolist()}, elapsed_time:{elapsed}")
+            
+            p_bar.update(1)
+            
+    # ログの保存
+    os.makedirs(save_dir,exist_ok=True)   # 保存先のディレクトリが存在しない場合は作成
+    if filepath_state is not None:
+        util_funcs.save_data(state_data,filepath_state)
+    if filepath_belief is not None:
+        util_funcs.save_data(belief_data,filepath_belief)
+    if filepath_action is not None:
+        util_funcs.save_data(action_data,filepath_action)
+    if filepath_obs is not None:
+        util_funcs.save_data(obs_data,filepath_obs)
+
     
 if __name__ == "__main__":
     main()
