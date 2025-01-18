@@ -3,8 +3,14 @@ import seaborn as sns
 import numpy as np
 import pickle
 import os
+import sys
 
+# PBVIのモジュールパスを追加
+sys.path.append("E:/sotsuron/venv_sotsuron/src/PBVI")
 
+from util import util
+
+# ヒートマップの作成
 def plot_heatmap(data_path, save_path, title):
     # データの準備
     with open(data_path, "rb") as f:
@@ -26,6 +32,7 @@ def plot_heatmap(data_path, save_path, title):
     plt.savefig(save_path)
     plt.show()
     
+# 折れ線グラフの作成
 def plot_line(data_path, save_path, title):
     # データの準備
     with open(data_path, "rb") as f:
@@ -68,9 +75,10 @@ def main():
     obs_save_path = os.path.join(save_dir_path,"plot_obs.png")
     
     # plot
+    
     plot_heatmap(state_data_path,state_save_path,"State")
-    plot_line(action_data_path,action_save_path,"Action")
-    plot_line(obs_data_path,obs_save_path,"Observation")
+    plot_heatmap(action_data_path,action_save_path,"Action")
+    plot_heatmap(obs_data_path,obs_save_path,"Observation")
     
 if __name__ == "__main__":
     main()

@@ -3,7 +3,7 @@ import itertools
 from tqdm import tqdm
 import time
 import os
-from Util_Funcs import util_funcs
+from util import util
 
 class Agent():
     def __init__(self, sigma, num_people):
@@ -11,7 +11,7 @@ class Agent():
         self.n = num_people
         
         # 状態、行動、観測空間の生成
-        self.attentions = util_funcs.generate_weight_list(self.n, 1)
+        self.attentions = util.generate_weight_list(self.n, 1)
         self.comforts = torch.tensor([0, 1])
         self.follows = torch.tensor([0, 1])
         
@@ -34,8 +34,8 @@ class Agent():
                         [1., 0., 0., 1., 1.]]) shape:(12, 5)
         """
         self.states = self.generate_state_space()
-        self.actions = util_funcs.generate_weight_list(self.n,2)
-        self.observations = util_funcs.generate_weight_list(self.n,1)
+        self.actions = util.generate_weight_list(self.n,1)
+        self.observations = util.generate_weight_list(self.n,1)
         
         self.num_attentions = self.attentions.shape[0]
         self.num_comforts = self.comforts.shape[0]
@@ -48,13 +48,13 @@ class Agent():
         # 状態遷移確率の初期化
         self.trans_prob_attention = torch.eye(self.num_attentions) # dim1 : current attention (縦軸), dim2 : next attention (横軸)
         for i  in range(self.num_attentions):
-            self.trans_prob_attention[i] = util_funcs.pdf_list(self.attentions[i],self.sigma,self.attentions)  # 状態遷移確率は正規分布でモデル化
+            self.trans_prob_attention[i] = util.pdf_list(self.attentions[i],self.sigma,self.attentions)  # 状態遷移確率は正規分布でモデル化
         
         # dim1 : current[comfort, follow] (縦軸), dim2 : next[comfort, follow] (横軸) 4*4の行列 [00,01,10,11]
-        self.trans_prob_others = torch.tensor([[0.7, 0.1, 0.1, 0.1],  
-                                               [0.1, 0.7, 0.1, 0.1],
-                                               [0.1, 0.1, 0.7, 0.1],
-                                               [0.1, 0.1, 0.1, 0.7]])
+        self.trans_prob_others = torch.tensor([[0.6, 0.2, 0.1, 0.1],  
+                                               [0.075, 0.6, 0.025, 0.3],
+                                               [0.05, 0.05, 0.5, 0.4],
+                                               [0.05, 0.05, 0.1, 0.8]])
                     
         # attentionとothersの遷移確率を結合
         self.trans_prob = torch.einsum("ij,kl->ikjl",self.trans_prob_attention,self.trans_prob_others).reshape(self.num_states,self.num_states)  # [s,s']
@@ -103,12 +103,12 @@ class Agent():
         # follow = 1, システムに従う場合
         for i in follow_1_index:
             for j in range(self.num_actions):
-                prob = 0.1 * util_funcs.pdf_list(self.states[i, :self.n], self.sigma, self.observations) + 0.9 * util_funcs.pdf_list(self.actions[j], self.sigma, self.observations)
+                prob = 0.1 * util.pdf_list(self.states[i, :self.n], self.sigma, self.observations) + 0.9 * util.pdf_list(self.actions[j], self.sigma, self.observations)
                 obs_prob[i,j,:] = prob
         # follow = 0, システムに従わない場合
         for i in follow_0_index:
             for j in range(self.num_actions):
-                prob = 0.9 * util_funcs.pdf_list(self.states[i, :self.n], self.sigma, self.observations) + 0.1 * util_funcs.pdf_list(self.actions[j], self.sigma, self.observations)
+                prob = 0.9 * util.pdf_list(self.states[i, :self.n], self.sigma, self.observations) + 0.1 * util.pdf_list(self.actions[j], self.sigma, self.observations)
                 obs_prob[i,j,:] = prob
 
         return obs_prob
@@ -126,17 +126,17 @@ class Environment:
     
     def sample_obs(self,next_state,action):
         if next_state[4] == 1:
-            normalized_prob = util_funcs.pdf_list(action, self.sigma, self.agent.observations)
+            normalized_prob = util.pdf_list(action, self.sigma, self.agent.observations)
             sight_sample_follow = self.agent.observations[torch.multinomial(torch.tensor(normalized_prob), 1).item()]
             return sight_sample_follow
         elif next_state[4] == 0:
-            normalized_prob = util_funcs.pdf_list(next_state[:3], self.sigma, self.agent.observations)
+            normalized_prob = util.pdf_list(next_state[:3], self.sigma, self.agent.observations)
             sight_sample_not_follow = self.agent.observations[torch.multinomial(torch.tensor(normalized_prob), 1).item()]    # torch.multinomial:与えられた確率分布に基づきサンプリング
             return sight_sample_not_follow
     
     def sample_state(self,state, action):
         # attention
-        normalized_prob = util_funcs.pdf_list(state[:3], self.sigma, self.agent.attentions)
+        normalized_prob = util.pdf_list(state[:3], self.sigma, self.agent.attentions)
         next_attention = self.agent.attentions[torch.multinomial(normalized_prob, 1).item()]
 
         # current index of comfort and follow
@@ -406,13 +406,13 @@ def main():
     # ログの保存
     os.makedirs(save_dir,exist_ok=True)   # 保存先のディレクトリが存在しない場合は作成
     if filepath_state is not None:
-        util_funcs.save_data(state_data,filepath_state)
+        util.save_data(state_data,filepath_state)
     if filepath_belief is not None:
-        util_funcs.save_data(belief_data,filepath_belief)
+        util.save_data(belief_data,filepath_belief)
     if filepath_action is not None:
-        util_funcs.save_data(action_data,filepath_action)
+        util.save_data(action_data,filepath_action)
     if filepath_obs is not None:
-        util_funcs.save_data(obs_data,filepath_obs)
+        util.save_data(obs_data,filepath_obs)
 
     
 if __name__ == "__main__":

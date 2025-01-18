@@ -5,86 +5,62 @@ import pickle
 import time
 from tqdm import tqdm
 import matplotlib.pyplot as plt
-from PBVI.util_funcs import Util_Funcs
+from PBVI.Util_Funcs import util_funcs
 
 torch.set_default_dtype(torch.float32)
 torch.set_default_tensor_type = torch.cuda.FloatTensor if torch.cuda.is_available() else torch.FloatTensor
 device = "cuda" if torch.cuda.is_available() else "cpu"
 torch.set_default_device(device)
 
-def generate_belief_points(step=0.5):
-    """0.2刻みで信念点の組を生成"""
-    values = torch.arange(0, 1 + step, step).round(decimals=2)
-    belief_combinations = torch.cartesian_prod(*[values] * 12)
-    
-    # 合計が1になる組み合わせのみを選択
-    valid_belief_points = belief_combinations[torch.abs(belief_combinations.sum(dim=1) - 1.0) < 1e-6]
-    
-    if valid_belief_points.size(0) == 0:
-        raise ValueError("No valid belief points generated. Check the step size and num_states.")
-    
-    belief_points_tensor = valid_belief_points.T.clone().detach()
-    #print("belief_points:", belief_points_tensor)
-    
-    return belief_points_tensor
+class Agent:
+    def __init__(self, num_states, num_actions, num_observations):
+        self.num_states = num_states
+        self.num_actions = num_actions
+        self.num_observations = num_observations
+        self.trans_prob = torch.rand(num_states, num_states)  # ダミーの遷移確率
+        self.obs_prob = torch.rand(num_states, num_actions, num_observations)  # ダミーの観測確率
+        self.belief = (torch.ones(num_states) / num_states).repeat(self.num_actions,self.num_observations,1)  # 初期信念状態
 
-def generate_belief_points2(self,step=1/2):
-    """0.2刻みで信念点の組を生成"""
-    values = [round(i * step,2) for i in range(int(1/step)+1)]  
-    #belief_points = torch.tensor([list(comb) for comb in itertools.product(values,repeat=num_states) if round(sum(comb),10)==1.0]).T
-    
-    belief_points = []
-    belief_combinations = itertools.product(values, repeat=12)
-    total_combinations = len(values)**12
-    print("start generating belief points")
-    with tqdm(total=total_combinations, desc="Generating belief points") as p_bar:
-        for belief in belief_combinations:
-            if abs(sum(belief) - 1.0) < 1e-6:  # 合計が1になる組み合わせのみを選択
-                belief_points.append(list(belief))
-            p_bar.update(1)
-    
-    if len(belief_points) == 0:
-        raise ValueError("No valid belief points generated. Check the step size and num_states.")
-    
-    belief_points_tensor = torch.tensor(belief_points).T.clone().detach()
-    #print("belief_points:", belief_points_tensor)
-    
-    return belief_points_tensor
-    
-state = torch.tensor([0,1,0,1,1])
-state_list= torch.tensor([[0., 0., 1., 0., 0.],
-                        [0., 0., 1., 0., 1.],
-                        [0., 0., 1., 1., 0.],
-                        [0., 0., 1., 1., 1.],
-                        [0., 1., 0., 0., 0.],
-                        [0., 1., 0., 0., 1.],
-                        [0., 1., 0., 1., 0.],
-                        [0., 1., 0., 1., 1.],
-                        [1., 0., 0., 0., 0.],
-                        [1., 0., 0., 0., 1.],
-                        [1., 0., 0., 1., 0.],
-                        [1., 0., 0., 1., 1.]])
-attentions = torch.tensor([[0,1,0],[1,0,0],[0,0,1]])
+    def update_belief(self, belief):
+        # 入力には[a_{t-1},o_{t-1}]のときの信念b(s):[s]が入る
+        # 正規化項 reg
+        sum_s1 = torch.einsum("sj,aos->aoj", self.trans_prob, belief)  # [s,s'] * [a,o,s] -> [a,o,s']
+        sum_s2 = torch.einsum("sj,jao->sao", self.trans_prob, self.obs_prob)  # [s,s'] * [s',a,o] -> [s,a,o]
 
-action = torch.tensor([1,0,0])
+        # 正規化項
+        reg = torch.einsum("aos,sao->ao", belief, sum_s2)  # [a,o,s] * [s,a,o] -> [a,o]
 
-obs = torch.tensor([0,1,0])
-observations = torch.tensor([[1,0,0],[0,1,0],[0,0,1]])
+        # 信念の更新
+        belief_not_reg = torch.einsum("jao,aoj->aoj", self.obs_prob, sum_s1)  # [s,a,o] * [a,o,s] -> [a,o,s]
+        update_belief = belief_not_reg / reg.unsqueeze(-1).expand(-1, -1, self.num_states)  # [a,o,s] / ([a,o] -> [a,o,s])
 
-trans_prob_others = torch.tensor([[0.7, 0.1, 0.1, 0.1],  
-                                [0.1, 0.7, 0.1, 0.1],
-                                [0.1, 0.1, 0.7, 0.1],
-                                [0.1, 0.1, 0.1, 0.7]])
+        """
+        # デバッグ用に中間結果を表示
+        print("sum_s1:", sum_s1)
+        print("sum_s2:", sum_s2)
+        print("reg:", reg)
+        print("belief_not_reg:", belief_not_reg)
+        print("update_belief:", update_belief)
+        """
+        
+        self.belief = update_belief
 
-sigma = 0.7
+        return update_belief
 
-print("start generating belief points 1")
-start_time = time.time()
-belief_points = generate_belief_points(1/3)
-print("elapsed time 1:", time.time() - start_time)
+# デバッグ用のデータを準備
+num_states = 5
+num_actions = 3
+num_observations = 2
 
-print("start generating belief points 2")
-start_time = time.time()
-belief_points = generate_belief_points2(1/3)
-print("elapsed time 2:", time.time() - start_time)
+agent = Agent(num_states, num_actions, num_observations)
 
+# ダミーの信念状態
+belief = torch.rand(num_actions, num_observations, num_states)
+
+# update_belief 関数の呼び出し
+for _ in range(10):
+    updated_belief = agent.update_belief(agent.belief)
+
+    # 結果の表示
+    print("Updated Belief State:")
+    print(updated_belief)

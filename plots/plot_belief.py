@@ -3,6 +3,12 @@ import torch
 import matplotlib.pyplot as plt
 from matplotlib.animation import FuncAnimation, PillowWriter
 import os
+import sys
+
+# PBVIのモジュールパスを追加
+sys.path.append("E:/sotsuron/venv_sotsuron/src/PBVI")
+
+from util import util
 
 class plot_belief:
     def __init__(self,data_path,save_path):
@@ -34,7 +40,7 @@ class plot_belief:
         plt.xlim(0, 1)
         plt.xlabel("belief")
         plt.ylabel("state")
-        plt.title(f"Belief (reward:hybrid),   frame: {frame+1}")
+        plt.title(f"Belief,   frame: {frame+1}")
         plt.grid()
         
         # 各ステップ時の state, action, obs を右上に表示
@@ -58,7 +64,7 @@ class plot_belief:
         
         # gif で保存
         writer = PillowWriter(fps=2)
-        ani.save(os.path.join(self.save_dir_path,"plot_belief_hybrid.gif"), writer=writer)
+        ani.save(os.path.join(self.save_dir_path,"plot_belief.gif"), writer=writer)
         
         plt.show()
         

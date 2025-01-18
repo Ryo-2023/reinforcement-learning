@@ -2,7 +2,7 @@ import torch
 import itertools
 import pickle
 
-class util_funcs:
+class util:
     @staticmethod
     def generate_weight_list(n_people,step):
         values = [round(i * 1/step, 2) for i in range(step+1)]  # [0.0, 0.5, 1.0] のリスト
@@ -17,6 +17,12 @@ class util_funcs:
             probabilities.append(prob)
         normalized_probabilities = torch.tensor([prob / sum(probabilities) for prob in probabilities])
         return normalized_probabilities
+    
+    @staticmethod
+    def open_data(data_path):
+        with open(data_path, "rb") as f:
+            data = pickle.load(f)
+        return data
     
     @staticmethod
     def save_data(data,file_name):
